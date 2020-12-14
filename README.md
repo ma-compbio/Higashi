@@ -23,7 +23,7 @@ It is known that under pytorch 1.7.0, there will be an error reporting backward 
 ## Input format
 
 There are one required input file and two optional input files:
-1. `data.txt`, a tab separated file with the following columns: ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count'] (We will support the SCOOL format in the future, detailed documentaion on the SCOOL format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
+1. `data.txt`, a tab separated file with the following columns: `['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']` (We will support the SCOOL format in the future, detailed documentaion on the SCOOL format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
 2. (optional) `label_info.pickle`, a python pickle file of a dictionary storing labeled information of cells. The structure of the dictionary can be something like:
   ```
   {
