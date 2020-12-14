@@ -3,10 +3,8 @@
 This is the implementation of the computational framework Higashi for scHi-C analysis.
 
 Higashi has four main components.
-1.  Represent the scHi-C dataset as a hypergraph, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively. 
-Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction (a).
-The read count for each chromatin interaction is used as attribute of the hyperedge.
-2. We train a hypergraph neural network based on the constructed hypergraph or unveiling high-order interaction patterns (b).
+1.  Represent the scHi-C dataset as a hypergraph, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively.  Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction. The read count for each chromatin interaction is used as attribute of the hyperedge. (Figure a)
+2. We train a hypergraph neural network based on the constructed hypergraph or unveiling high-order interaction patterns. (Figure b)
 3.  We extract the embedding vectors of cell nodes from the trained hypergraph neural network for downstream analysis. % such as cell type identification or visualization.
 4.  We then use the trained hypergraph neural network to impute single-cell Hi-C contact maps with the flexibility to incorporate the latent correlations between cells to enhance overall imputation, enabling detailed characterization of 3D genome features such as TAD-like domain boundaries and A/B compartment scores at single-cell resolution.
 
