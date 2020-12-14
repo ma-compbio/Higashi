@@ -85,9 +85,12 @@ All customizable parameters are stored in a JSON config file. An example config 
 
 ## Usage
 ### Run the Higashi main program
-
+#### Commands
 1. `cd Code`
 2. Run `python Process.py -c {CONFIG_PATH}`. Run the data processing pipeline for the given configuration file
+3. Run `python main_cell.py -c {CONFIG_PATH}`. Train the Higashi model for the given configuration file
+#### Output
+Embedding vectors and imputed matrix at the `temp_dir` of the given configuration file
 
 ### Calling and calibrating single cell TAD-like domain boundaries
 Under construction
