@@ -510,7 +510,7 @@ def generate_embeddings():
 	if coassay:
 		cell_attributes = np.load(os.path.join(temp_dir, "cell_attributes.npy")).astype('float32')
 		# cell_attributes = StandardScaler().fit_transform(cell_attributes.reshape((-1, 1))).reshape((len(cell_attributes), -1))
-		# temp = PCA(n_components=min(int(np.min(cell_attributes.shape) * 1.3), bottle_neck)).fit_transform(cell_attributes)
+		# temp = PCA(n_components=min(int(np.min(cell_attributes.shape) * 1.3), dimensions)).fit_transform(cell_attributes)
 		# pca_after = [cell_attributes]
 		# pca_after.append(cell_attributes)
 		# embeddings = [cell_attributes]
@@ -817,7 +817,6 @@ if __name__ == '__main__':
 	chrom_list = config['chrom_list']
 	print (chrom_list)
 	dimensions = config['dimensions']
-	bottle_neck = config['bottle_neck']
 	impute_list = config['impute_list']
 	res = config['resolution']
 	neighbor_num = config['neighbor_num']
@@ -994,7 +993,7 @@ if __name__ == '__main__':
 	# Constructing the model
 	node_embedding_init = MultipleEmbedding(
 		embeddings_initial,
-		bottle_neck,
+		dimensions,
 		False,
 		num_list, targets_initial).to(device)
 	node_embedding_init.wstack[0].fit(embeddings_initial[0], 300, sparse=False, targets=torch.from_numpy(targets_initial[0]).float().to(device), batch_size=1024)
@@ -1008,7 +1007,7 @@ if __name__ == '__main__':
 		d_v=16,
 		node_embedding=node_embedding_init,
 		diag_mask=True,
-		bottle_neck=bottle_neck,
+		bottle_neck=dimensions,
 		attribute_dict=attribute_dict,
 		bias_feats=bias_feats,
 		encoder_dynamic_nn=node_embedding_init,
@@ -1076,7 +1075,7 @@ if __name__ == '__main__':
 	
 	remove_flag = True
 	node_embedding2 = GraphSageEncoder_with_weights(features=node_embedding_init, linear_features=node_embedding_init,
-	                                                feature_dim=bottle_neck,
+	                                                feature_dim=dimensions,
 	                                                embed_dim=dimensions, node2nbr=neighbor_list,
 	                                                num_sample=8, gcn=False, num_list=num_list,
 	                                                transfer_range=local_transfer_range, start_end_dict=start_end_dict,
@@ -1135,7 +1134,7 @@ if __name__ == '__main__':
 	node_embedding2.node2nbr = neighbor_list
 	# node_embedding2.off_hook()
 	# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,
-	#                                                 feature_dim=bottle_neck,
+	#                                                 feature_dim=dimensions,
 	#                                                 embed_dim=dimensions, node2nbr=neighbor_list,
 	#                                                 num_sample=16, gcn=False, num_list=num_list,
 	#                                                 transfer_range=0, start_end_dict=start_end_dict,
