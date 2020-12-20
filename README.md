@@ -18,7 +18,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/Overview.png)
 
 
-# Requirements
+## Requirements
 Running Higashi
 - Python (>=3.5.0, tested on 3.7.9)
 - h5py (tested on 2.10.0)
@@ -36,7 +36,9 @@ Generating visualization plots
 
 **Note**: It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
 
-## Input format
+
+## How to use
+### Step 1: Prepare the input files
 The input files include:
 1. `data.txt`, a tab separated file with the following columns: `['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']` (We will support the SCool format in the future. Detailed documentaion of the SCool format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
 2. (optional) `label_info.pickle`, a python pickle file of a dictionary storing labeled information of cells. The structure of the dictionary:
@@ -69,7 +71,7 @@ The input files include:
 
  
 
-## Configure the parameters
+### Step 2: configure the running parameters
 All customizable parameters are stored in a JSON config file. An example config file can be found in `config_dir/example.JSON`
 | params       | description                  | example                   |
 |--------------|------------------------------|---------------------------|
@@ -94,8 +96,8 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  optional_smooth |smooth when calculating features for cell nodes |false
 | optional_quantile|quantile normalization when calculating feautures for cell nodes | false
 
-## Usage
-### Run the Higashi main program
+
+### Step 3: Enjoy Higashi
 #### Commands
 1. `cd Code`
 2. Run `python Process.py -c {CONFIG_PATH}`. Run the data processing pipeline for the given configuration file
@@ -103,11 +105,12 @@ All customizable parameters are stored in a JSON config file. An example config 
 #### Output
 Embedding vectors and imputed matrix at the `temp_dir` of the given configuration file
 
-### Calling and calibrating single cell TAD-like domain boundaries
+#### Calling and calibrating single cell TAD-like domain boundaries
 Under construction
-### Calling single cell compartment scores
+#### Calling single cell compartment scores
 Under construction
-### One more thing
+
+#### One more thing
 Under construction
 
 
