@@ -3,6 +3,7 @@
      alt="logo" width="240">
 
 **Multiscale and integrative single-cell Hi-C analysis with Higashi**
+
 As a computational framework for scHi-C analysis, Higashi has the following features:
 
 -  Higashi represents the scHi-C dataset as a **hypergraph** (Figure a) 
