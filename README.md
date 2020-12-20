@@ -9,7 +9,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 
 -  Higashi represents the scHi-C dataset as a **hypergraph** (Figure a) 
      - Each cell and each genomic bin are represented as cell node and genomic bin node.
-     - Each non-zero entry in the single-cell contact map is modeled as a hyperedge (cell i ,bin j , bin k)
+     - Each non-zero entry in the single-cell contact map is modeled as a hyperedge. 
      - The read count for each chromatin interaction is used as attribute of the hyperedge. 
 - Higashi uses a **hypergraph neural network** to unveil high-order interaction patterns within this constructed hypergraph. (Figure b)
 - Higashi can produce the **embeddings** for the scHi-C for downstream analysis.
