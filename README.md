@@ -60,12 +60,12 @@ The input files include:
  │   ├── bin (If it's not something based on the genomic bin, then leave it out)
  │   │   ├── chrom
  │   │   ├── start
- │   │   ├── end
+ │   │   └── end
  │   ├── 0
  │   ├── 1
- │   ├── 2
- ├── signal2
-...
+ │   └── 2
+ └── signal2
+ │   ├── ...
 
 ```
 
