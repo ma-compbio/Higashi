@@ -41,13 +41,14 @@ Generating visualization plots
 ### Step 1: Prepare the input files
 The input files include:
 1. `data.txt`, a tab separated file with the following columns: `['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']` (We will support the SCool format in the future. Detailed documentaion of the SCool format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
-2. (optional) `label_info.pickle`, a python pickle file of a dictionary storing labeled information of cells. The structure of the dictionary:
+2. (optional) `label_info.pickle`, a python pickle file of a dictionary storing labeled information of cells. An example of the structure of the dictionary:
   
   ```
   {
     'cell type': ['GM12878', 'K562', 'NHEK',.....,'GM12878'],
     'coverage':[12000, 14000, ...., 15000],
-    'batch':['batch_1', 'batch_1',..., 'batch_2']
+    'batch':['batch_1', 'batch_1',..., 'batch_2'],
+    ...
   }
   ``` 
    The order of the labeled vector should be consistent with the `'cell_id'` column of the `data.txt`
@@ -57,16 +58,16 @@ The input files include:
  ```
  .
  ├── signal1
- │   ├── bin (If it's not something based on the genomic bin, then leave it out)
+ │   ├── bin (info mation about entries in the signal 1 file. If the signal 1 is not based on genomic coordinates, left this option out)
  │   │   ├── chrom
  │   │   ├── start
  │   │   └── end
- │   ├── 0
+ │   ├── 0 (signals, size should be the same as signal1/bin/chrom)
  │   ├── 1
  │   └── 2
  └── signal2
  │   ├── ...
-
+ └──
 ```
 
 
