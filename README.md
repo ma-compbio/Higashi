@@ -1,5 +1,5 @@
 <img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo2.png" align="right"
-     alt="logo" width="230">
+     alt="logo" width="300">
 # Higashi (Under construction)
 
 
