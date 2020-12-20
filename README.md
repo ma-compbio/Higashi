@@ -116,18 +116,18 @@ Under construction
 
 ## Cite
 
-If you want to cite our paper
+Cite our paper by
 
-![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/paper.png)
 ```
 @article {Zhang2020multiscale,
 	author = {Zhang, Ruochi and Zhou, Tianming and Ma, Jian},
 	title = {Multiscale and integrative single-cell Hi-C analysis with Higashi},
-	elocation-id = {2020.12.13.422537},
 	year = {2020},
 	doi = {10.1101/2020.12.13.422537},
 	publisher = {Cold Spring Harbor Laboratory},
 	journal = {bioRxiv}
 }
 ```
+
+![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/paper.png)
 
