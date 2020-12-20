@@ -3,8 +3,12 @@
      alt="logo" width="240">
 
 **Multiscale and integrative single-cell Hi-C analysis with Higashi**
+As a computational framework for scHi-C analysis, Higashi has the following features:
 
--  Higashi represents the scHi-C dataset as a **hypergraph**, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively.  Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction. The read count for each chromatin interaction is used as attribute of the hyperedge. (Figure a)
+-  Higashi represents the scHi-C dataset as a **hypergraph** (Figure a) 
+     - Each cell and each genomic bin are represented as cell node and genomic bin node.
+     - Each non-zero entry in the single-cell contact map is modeled as a hyperedge (cell i ,bin j , bin k)
+     - The read count for each chromatin interaction is used as attribute of the hyperedge. 
 - Higashi uses a **hypergraph neural network** to unveil high-order interaction patterns within this constructed hypergraph. (Figure b)
 - Higashi can produce the **embeddings** for the scHi-C for downstream analysis.
 -  Higashi can **impute single-cell Hi-C contact maps** , enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
@@ -13,20 +17,22 @@
 
 
 # Requirements
-The core part of Higashi (`Process.py`, `main_cell.py`)
-
-- h5py
-- numpy
+Running Higashi
+- Python (>=3.5.0, tested on 3.7.9)
+- h5py (tested on 2.10.0)
+- numpy (tested on 1.19.2)
+- pandas (tested on 1.1.3)
 - pytorch (tested on 1.4.0)
-- scikit-learn
-- tqdm
+- scikit-learn (tested on 0.23.2)
+- tqdm (tested on 4.50.2)
 
 Generating visualization plots
 - seaborn
 - matplotlib
 - UMAP
+- bokeh (tested on 2.2.3)
 
-It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
+**Note**: It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
 
 ## Input format
 The input files include:
@@ -104,5 +110,15 @@ Under construction
 ## Cite
 
 If you want to cite our paper
+
+@article {Zhang2020multiscale,
+	author = {Zhang, Ruochi and Zhou, Tianming and Ma, Jian},
+	title = {Multiscale and integrative single-cell Hi-C analysis with Higashi},
+	elocation-id = {2020.12.13.422537},
+	year = {2020},
+	doi = {10.1101/2020.12.13.422537},
+	publisher = {Cold Spring Harbor Laboratory},
+	journal = {bioRxiv}
+}
 
 
