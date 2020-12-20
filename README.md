@@ -1,6 +1,7 @@
-# Higashi (Under construction)
 <img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo2.png" align="right"
      alt="logo" width="230">
+# Higashi (Under construction)
+
 
 ***Multiscale and integrative single-cell Hi-C analysis with Higashi***
 
