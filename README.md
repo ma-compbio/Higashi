@@ -1,4 +1,4 @@
-# Higashi
+# Higashi (Under construction)
 <img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo.png" align="right"
      alt="logo" width="240">
 
