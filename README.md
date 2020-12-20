@@ -90,7 +90,9 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  embedding_name| name of embedding vectors to store | "exp1"
 |  coassay| using co-assayed signals or not | true
 |  coassay_signal| name of the co-assayed signals in the hdf5 file to use (can be empy) | "meth_cg-100kb-cg_rate"
-
+|  cpu_num | Higashi is optimized for multiprocessing. Limit the number of cores to use with this param. -1 represents use all available cpu.  |-1
+|  optional_smooth |smooth when calculating features for cell nodes |false
+| optional_quantile|quantile normalization when calculating feautures for cell nodes | false
 
 ## Usage
 ### Run the Higashi main program
