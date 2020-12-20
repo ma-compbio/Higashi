@@ -1,5 +1,5 @@
 # Higashi
-<img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo.png" align="right"
+<img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo2.png" align="right"
      alt="logo" width="240">
 
 **Multiscale and integrative single-cell Hi-C analysis with Higashi**

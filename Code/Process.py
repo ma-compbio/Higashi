@@ -13,7 +13,6 @@ import multiprocessing
 import h5py
 import pickle
 from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA
-from umap import UMAP
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, KBinsDiscretizer
 import subprocess
 
