@@ -3,11 +3,11 @@
      alt="logo" width="240">
 
 **Multiscale and integrative single-cell Hi-C analysis with Higashi**
-Higashi has four main components.
-1.  Represent the scHi-C dataset as a **hypergraph**, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively.  Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction. The read count for each chromatin interaction is used as attribute of the hyperedge. (Figure a)
-2. We train a **hypergraph neural network** based on the constructed hypergraph or unveiling high-order interaction patterns. (Figure b)
-3. Higashi can produce the **embeddings** for the scHi-C for downstream analysis
-4.  Higashi can **impute single-cell Hi-C contact maps** , enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
+
+-  Higashi represents the scHi-C dataset as a **hypergraph**, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively.  Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction. The read count for each chromatin interaction is used as attribute of the hyperedge. (Figure a)
+- Higashi uses a **hypergraph neural network** to unveil high-order interaction patterns within this constructed hypergraph. (Figure b)
+- Higashi can produce the **embeddings** for the scHi-C for downstream analysis.
+-  Higashi can **impute single-cell Hi-C contact maps** , enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
 
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/Overview.png)
 
@@ -30,7 +30,7 @@ It is known that under pytorch 1.7.0, there will be a "backward error" (required
 
 ## Input format
 The input files include:
-1. `data.txt`, a tab separated file with the following columns: `['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']` (We will support the SCool format in the future. Detailed documentaion of the SCOOL format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
+1. `data.txt`, a tab separated file with the following columns: `['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']` (We will support the SCool format in the future. Detailed documentaion of the SCool format can be found at https://cooler.readthedocs.io/en/latest/schema.html?highlight=scool#single-cell-single-resolution)
 2. (optional) `label_info.pickle`, a python pickle file of a dictionary storing labeled information of cells. The structure of the dictionary:
   
   ```
@@ -40,7 +40,7 @@ The input files include:
     'batch':['batch_1', 'batch_1',..., 'batch_2']
   }
   ``` 
-   The order of the labeled vector should be consistent with 'cell_id' of the `data.txt`
+   The order of the labeled vector should be consistent with the `'cell_id'` column of the `data.txt`
   
  3. (optional) `sc_signal.hdf5`, a hdf5 file for storing the coassayed signals. The structure of the hdf5 file:
  
