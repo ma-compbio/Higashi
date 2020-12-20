@@ -55,15 +55,16 @@ The input files include:
  3. (optional) `sc_signal.hdf5`, a hdf5 file for storing the coassayed signals. The structure of the hdf5 file:
  
  ```
- ./"signal1"
-  ./"bin" (If it's not something based on the genomic bin, then leave it out)
-    ./"chrom"
-    ./"start"
-    ./"end"
-  ./"0"
-  ./"1"
-  ./"2"
-./"signal2"
+ .
+ ├── signal1
+ │   ├── bin (If it's not something based on the genomic bin, then leave it out)
+ │   │   ├── chrom
+ │   │   ├── start
+ │   │   ├── end
+ │   ├── 0
+ │   ├── 1
+ │   ├── 2
+ ├── signal2
 ...
 
 ```
