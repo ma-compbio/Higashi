@@ -2,7 +2,7 @@
 
 This is the implementation of the computational framework Higashi for scHi-C analysis.
 <img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo.png" align="right"
-     alt="Size Limit logo by Anton Lovchikov" width="120">
+     alt="logo" width="120">
 
 Higashi has four main components.
 1.  Represent the scHi-C dataset as a hypergraph, where each cell and each genomic bin are represented as cell node and genomic bin node, respectively.  Each non-zero entry in the single-cell contact map is modeled as a hyperedge connecting the corresponding cell and the two genomic loci of that particular chromatin interaction. The read count for each chromatin interaction is used as attribute of the hyperedge. (Figure a)
