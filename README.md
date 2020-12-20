@@ -111,7 +111,7 @@ Under construction
 ## Cite
 
 If you want to cite our paper
-
+```
 @article {Zhang2020multiscale,
 	author = {Zhang, Ruochi and Zhou, Tianming and Ma, Jian},
 	title = {Multiscale and integrative single-cell Hi-C analysis with Higashi},
@@ -121,5 +121,5 @@ If you want to cite our paper
 	publisher = {Cold Spring Harbor Laboratory},
 	journal = {bioRxiv}
 }
-
+```
 
