@@ -8,12 +8,12 @@
 As a computational framework for scHi-C analysis, Higashi has the following features:
 
 -  Higashi represents the scHi-C dataset as a **hypergraph** (Figure a) 
-     - Each cell and each genomic bin are represented as cell node and genomic bin node.
+     - Each cell and each genomic bin are represented as the cell node and the genomic bin node.
      - Each non-zero entry in the single-cell contact map is modeled as a hyperedge. 
-     - The read count for each chromatin interaction is used as attribute of the hyperedge. 
+     - The read count for each chromatin interaction is used as the attribute of the hyperedge. 
 - Higashi uses a **hypergraph neural network** to unveil high-order interaction patterns within this constructed hypergraph. (Figure b)
 - Higashi can produce the **embeddings** for the scHi-C for downstream analysis.
--  Higashi can **impute single-cell Hi-C contact maps** , enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
+-  Higashi can **impute single-cell Hi-C contact maps**, enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
 
 --------------------------
 
@@ -134,7 +134,7 @@ Fill in the `{CONFIG_PATH}` with the path to the configuration JSON file that yo
 - generate a dictionary that'll map genomic bin loci to the node id.
 - extract data from the data.txt and turn that into the format of hyperedges (triplets)
 - create contact maps based on sparse scHi-C for visualization, baseline model, and generate node attributes
-- run linear convolution + rwr (scHiCluster) to impute the contact maps as baseline and visualization
+- run linear convolution + random-walk-with-restart (scHiCluster) to impute the contact maps as baseline and visualization
 - **(Optional)** smooth the contact maps 
 - **(Optional)** quantile normalization
 - generate node attributes
@@ -155,7 +155,7 @@ When `{START_STEP}` is 1, the program would execute step 1,2,3 sequentially.
 #### Output
 The output is stored at the `temp_dir`, which contains
 1. Embedding vectors for the given configuration file. The embedding vectors are saved with name `{embedding_name}\_{id}\_origin.npy`. The `{embedding_name}` is the parameter in the configuration file. The `{id}` starts at 0, ends with the number of chromosomes that is contained in the training data. 0 corresponds to the cell embeddings. 1 ~ corresponds to embeddings of bins from each chromosome.
-2. Imputed matrices. The imputed matrcies are saved with name `{chr1}_{embedding_name}_nbr_{k}_impute.hdf5`. The format of the imputed matrix is an hdf5 file with the structure
+2. Imputed matrices. The imputed matrices are saved with name `{chr1}_{embedding_name}_nbr_{k}_impute.hdf5`. The format of the imputed matrix is an hdf5 file with the structure
  ```
  .
  ├── coordinates (vector size of k x 2)
@@ -202,11 +202,11 @@ Finally, open a browser and go to `{IP}:{PORT}/Higashi_vis`. If you are running 
 If you see the following interface, you have successfully launched the visualization tool.
 ![figs/screen.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen1.png)
 
-A detailed tutorial on the functions of this visualization tool, can be found at [Here](https://github.com/ma-compbio/Higashi/tree/main/Code/Higashi_vis) (still in progress)
+A detailed tutorial on the functions of this visualization tool can be found at [Here](https://github.com/ma-compbio/Higashi/tree/main/Code/Higashi_vis) (still in progress)
 
 ---------
 
-Our lab has also developed a powerful multi-modal visualization tool called [Nucleom Browser](http://vis.nucleome.org/entry/home), which will support the visualization of scHi-C data and Higashi analysis results in the future.
+Our lab has also developed a powerful multi-modal visualization tool named [Nucleom Browser](http://vis.nucleome.org/entry/home), which will support the visualization of scHi-C data and Higashi analysis results in the future.
 
 Please check out:
 - [Home page](http://vis.nucleome.org/entry/home)
