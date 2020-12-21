@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>Higashi-vis</title>
+         <style>
+            div.scrollable {
+                overflow: auto;
+            }
+        </style>
+        <meta charset="utf-8">
+         <style>
+             {% include 'styles.css' %}
+        </style>
+        {{ bokeh_css }}
+        {{ bokeh_js }}
+
+        <div class="content">
+        </div>
+    </head>
+    <body>
+        {{ plot_div|indent(8) }}
+        {{ plot_script|indent(8) }}
+    </body>
+
+</html>

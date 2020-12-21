@@ -1,0 +1,89 @@
+.custom_slider {
+    }
+
+.custom_slider .bk-noUi-target{
+background:#20262B;
+    border-color: #3D3D3D;
+}
+
+.custom_slider .bk-noUi-base {
+background:#20262B;
+    border-color: #3D3D3D;
+    box-shadow: none;
+}
+
+.custom_slider .bk-noUi-connect {
+background-color: #1F2123 !important;
+    border-color: #3D3D3D;
+     box-shadow: none;
+}
+
+.custom_slider .bk-noUi-handle {
+background:#20262B;
+    border-color: #3D3D3D;
+    box-shadow: none;
+}
+
+.bk-input-group .custom_select .bk-input{
+    background-color:#20262B;
+    color: white;
+    border-color: #3D3D3D;
+}
+
+.custom_select .bk-input{
+    background-color:#20262B;
+    color: white;
+    border-color: #3D3D3D;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+/* Handle */
+::-webkit-scrollbar-thumb {
+  background: #888;
+}
+
+/* Handle on hover */
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.div_container{
+overflow-y:visible;
+    overflow-x:visible;
+  overscroll-behavior-y: contain;
+  scroll-snap-type: y mandatory;
+    height: 300px;
+    width: 900px;
+    position: absolute;
+    display: block;
+}
+
+
+.div_container > div >div:last-child {
+  scroll-snap-align: end;
+    background: lightblue;
+}
+
+.div_container > div > div {
+    padding: 0;
+
+}
+
+.div_container .bk{
+    color: inherit;
+    background-color: inherit;
+}
+
+.div_container .bk-clearfix{
+    color: inherit;
+    background-color: inherit;
+}
+
+.custom_button {
+    background-color: inherit;
+    color: inherit;
+}

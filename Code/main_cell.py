@@ -645,8 +645,10 @@ if __name__ == '__main__':
 	neighbor_num = config['neighbor_num']
 	local_transfer_range = config['local_transfer_range']
 	config_name = config['config_name']
-	rank_thres =  config['rank_thres']
+	
 	mode = config["loss_mode"]
+	if mode == 'rank':
+		rank_thres = config['rank_thres']
 	embedding_name = config['embedding_name']
 	
 	if "coassay" in config:
