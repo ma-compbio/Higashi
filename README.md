@@ -206,7 +206,8 @@ A detailed tutorial on the functions of this visualization tool can be found at 
 
 ---------
 
-Our lab has also developed a powerful multi-modal visualization tool named [Nucleom Browser](http://vis.nucleome.org/entry/home), which will support the visualization of scHi-C data and Higashi analysis results in the future.
+Our lab has also developed a powerful multimodal nteractive data visualization and exploration platform named [Nucleom Browser](http://vis.nucleome.org/entry/home) to integrate genomic, imaging, and 3D genome structure data. 
+**Nucleom Browser** will support the visualization of scHi-C data and Higashi analysis results in the future.
 
 Please check out:
 - [Home page](http://vis.nucleome.org/entry/home)
