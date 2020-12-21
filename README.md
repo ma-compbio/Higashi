@@ -209,9 +209,9 @@ A detailed tutorial on the functions of this visualization tool, can be found at
 Our lab has also developed a powerful multi-modal visualization tool called [Nucleom Browser](http://vis.nucleome.org/entry/home), which will support the visualization of scHi-C data and Higashi analysis results in the future.
 
 Please check out:
--[Home page](http://vis.nucleome.org/entry/home)
--[Documentation](https://nb-docs.readthedocs.io/en/latest/)
--[Source code](https://github.com/nucleome)
+- [Home page](http://vis.nucleome.org/entry/home)
+- [Documentation](https://nb-docs.readthedocs.io/en/latest/)
+- [Source code](https://github.com/nucleome)
 
 ![figs/screen2.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen2.png)
 
