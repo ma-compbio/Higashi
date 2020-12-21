@@ -19,7 +19,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 
 
 ## Requirements
-Running Higashi
+**Running Higashi**
 - Python (>=3.5.0, tested on 3.7.9)
 - h5py (tested on 2.10.0)
 - numpy (tested on 1.19.2)
@@ -28,11 +28,15 @@ Running Higashi
 - scikit-learn (tested on 0.23.2)
 - tqdm (tested on 4.50.2)
 
-Generating visualization plots
+**Generating visualization plots**
 - seaborn
 - matplotlib
 - UMAP
-- bokeh (tested on 2.2.3)
+
+**Interactive visualization sessions**
+- bokeh (tested on 2.1.1)
+- PIL (tested on 7.2.0)
+- cachetools (tested on 4.1.1)
 
 **Note**: It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
 
@@ -53,7 +57,7 @@ All these input files should be put under the same directory. The path to this d
   ``` 
    The order of the labeled vector should be consistent with the `'cell_id'` column of the `data.txt`
   
- 3. **(optional)** `sc_signal.hdf5`, a hdf5 file for storing the coassayed signals. The structure of the hdf5 file:
+ 3. **(Optional)** `sc_signal.hdf5`, a hdf5 file for storing the coassayed signals. The structure of the hdf5 file:
  
  ```
  .
