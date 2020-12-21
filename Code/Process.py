@@ -522,10 +522,10 @@ else:
 print ("min bin", min_bin)
 
 
-# generate_chrom_start_end()
-# extract_table()
-# create_matrix()
-# impute_all()
+generate_chrom_start_end()
+extract_table()
+create_matrix()
+impute_all()
 optional_smooth_flag = False
 if "optional_smooth" in config:
 	if config['optional_smooth']:
