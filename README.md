@@ -15,6 +15,8 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 - Higashi can produce the **embeddings** for the scHi-C for downstream analysis.
 -  Higashi can **impute single-cell Hi-C contact maps** , enabling detailed characterization of 3D genome features such as **TAD-like domain boundaries** and **A/B compartment scores** at single-cell resolution.
 
+--------------------------
+
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/Overview.png)
 
 
