@@ -930,10 +930,10 @@ if __name__ == '__main__':
 	if training_stage <= 2:
 		# Impute Stage 2
 		if non_para_impute:
-			impute_process(args.config, higashi_model, "%s_nbr_%d_impute_1l"  % (embedding_name, 1), mode)
+			impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode)
 		else:
 			torch.save(higashi_model, save_path + "_stage2_model")
-			impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_1l" %(embedding_name, 1), mode)
+			impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute" %(embedding_name, 1), mode)
 	
 	
 	# Loading Stage 2

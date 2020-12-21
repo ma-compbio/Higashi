@@ -246,7 +246,7 @@ def async_heatmap22(selected, id):
 		
 		b = np.zeros((size, size))
 		
-		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_nbr_1_impute_1l.hdf5"), "r") as f:
+		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_nbr_1_impute.hdf5"), "r") as f:
 			coordinates = f['coordinates']
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
 			p = 0
