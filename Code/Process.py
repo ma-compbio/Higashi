@@ -484,7 +484,7 @@ if not os.path.exists(bin_attr_dir):
 contact_file_identifier = config['contact_file_identifier']
 genome_reference_path = config['genome_reference_path']
 
-if 'cpu_num' in cpu_num:
+if 'cpu_num' in config:
 	cpu_num = config['cpu_num']
 else:
 	cpu_num = -1
