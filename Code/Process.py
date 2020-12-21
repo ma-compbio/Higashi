@@ -448,7 +448,13 @@ def process_signal():
 	
 	pool.shutdown(wait=True)
 	
-
+	attributes_list = []
+	for chrom in chrom_list:
+		temp = np.load(os.path.join(temp_dir, "pretrain_coassay_%s.npy" % chrom))
+		attributes_list.append(temp)
+	attributes_list = np.concatenate(attributes_list)
+	np.save(os.path.join(temp_dir, "pretrain_coassay.npy"), attributes_list)
+	
 args = parse_args()
 
 config = get_config(args.config)

@@ -22,5 +22,7 @@
   "coassay_signal": ["meth_cg-100kb-cg_rate_corrected"],
   "cpu_num": -1,
   "optional_smooth": false,
-  "optional_quantile": false
+  "optional_quantile": false,
+  "rank_thres": 1,
+  "loss_mode": "rank"
 }

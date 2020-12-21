@@ -42,7 +42,6 @@ def get_free_gpu():
 def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 	x = batch_data
 	w = batch_weight
-	# print (x, x.device)
 	pred = model(x)
 	
 	if use_recon:
@@ -61,8 +60,7 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 		pred = F.softplus(pred).float()
 		diff = (pred.view(-1, 1) - pred.view(1, -1)).view(-1)
 		diff_w = (w.view(-1, 1) - w.view(1, -1)).view(-1)
-		thres = 1
-		mask_rank = torch.abs(diff_w) > thres
+		mask_rank = torch.abs(diff_w) > rank_thres
 		diff = diff[mask_rank].float()
 		diff_w = diff_w[mask_rank]
 		label = (diff_w > 0).float()
@@ -81,7 +79,6 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 	domain_loss = torch.as_tensor([0], dtype=torch.float).to(device)
 	
 	return pred, main_loss, mse_loss, domain_loss
-
 
 
 def train_epoch(model, loss_func, training_data_generator, optimizer_list):
@@ -336,34 +333,16 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 	edges, edge_weight = training_data
 	validation_data, validation_weight = validation_data
 	
-	# training_data_generator = DataGenerator(edges, edge_weight, int(batch_size / (neg_num + 1) * collect_num), 1, True)
-	# validation_data_generator = DataGenerator(validation_data, validation_weight, int(batch_size / (neg_num + 1)), 1,
-	#                                           False)
-	#
 	training_data_generator = DataGenerator(edges, edge_weight, int(batch_size / (neg_num + 1) * collect_num),
 	                                              True, num_list)
 	validation_data_generator = DataGenerator(validation_data, validation_weight, int(batch_size / (neg_num + 1)),
 	                                                False, num_list)
 	
-	if clustering_flag:
-		with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
-			label_info = pickle.load(f)
-			target = np.array(label_info[config['clustering']])
-			
-			target2int = np.zeros_like(target, dtype='int')
-			uniques = np.unique(target)
-			for i, t in enumerate(uniques):
-				target2int[target == t] = i
-	else:
-		target, target2int = None, None
 	
 	for epoch_i in range(epochs):
 		if save_embed:
 			save_embeddings(model, True)
 			save_embeddings(model, False)
-			
-			
-		
 		
 		print('[ Epoch', epoch_i, 'of', epochs, ']')
 		
@@ -435,21 +414,12 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 		elapse=(time.time() - start)))
 
 
-# print ("no improve:", no_improve)
-# if no_improve >= 6:
-# 	break
-# checkpoint = torch.load(save_path)
-# model.load_state_dict(checkpoint['model_link'])
 def get_neighbor(x):
 	result = set()
 	a = np.copy(x)
 	temp = (a + neighbor_mask)
 	temp = np.sort(temp, axis=-1)
-	# for cell in cell_neighbor_list[a[0]]:
-	# 	temp1 = np.copy(temp)
-	# 	temp1[:, 0] = cell
-	# 	for t in temp1:
-	# 		result.add(tuple(t))
+	
 	for t in temp:
 		result.add(tuple(t))
 	return result
@@ -463,7 +433,6 @@ def save_embeddings(model, origin=False):
 		for j in range(math.ceil(len(ids) / batch_size)):
 			x = ids[j * batch_size:min((j + 1) * batch_size, len(ids))]
 			if origin:
-				# embed = model.node_embedding(x)
 				embed = node_embedding_init(x)
 			else:
 				embed = model.node_embedding(x)
@@ -491,33 +460,23 @@ def save_embeddings(model, origin=False):
 	return embeddings
 
 
-def generate_embeddings():
+def generate_attributes():
 	embeddings = []
 	targets = []
 	pca_after = []
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
-		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
+		a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
 	pca_after = np.concatenate(pca_after, axis=-1).astype('float32')
 	
 	
-	np.save(os.path.join(temp_dir, "pca_after.npy"), pca_after)
-	vis1 = PCA(n_components=2).fit_transform(pca_after)
-	np.save(os.path.join(temp_dir, "pca_vis.npy"), vis1)
 	
 	if coassay:
-		cell_attributes = np.load(os.path.join(temp_dir, "cell_attributes.npy")).astype('float32')
-		# cell_attributes = StandardScaler().fit_transform(cell_attributes.reshape((-1, 1))).reshape((len(cell_attributes), -1))
-		# temp = PCA(n_components=min(int(np.min(cell_attributes.shape) * 1.3), dimensions)).fit_transform(cell_attributes)
-		# pca_after = [cell_attributes]
-		# pca_after.append(cell_attributes)
-		# embeddings = [cell_attributes]
-		# targets.append(pca_after)
-		# embeddings.append(cell_attributes)
-		targets.append(np.load(os.path.join(temp_dir, "exp1_0_all_backup.npy")).astype('float32'))
-		embeddings.append(np.load(os.path.join(temp_dir, "exp1_0_all_backup.npy")).astype('float32'))
+		cell_attributes = np.load(os.path.join(temp_dir, "pretrain_coassay.npy")).astype('float32')
+		targets.append(cell_attributes)
+		embeddings.append(cell_attributes)
 	else:
 		embeddings.append(pca_after)
 		targets.append(pca_after)
@@ -552,55 +511,6 @@ def generate_embeddings():
 		'float32')
 	
 	return embeddings, attribute_dict, targets
-	
-	
-def reduce_duplicate(list_of_nb):
-	nb_list = []
-	num = 10
-	for nb in tqdm(list_of_nb):
-		if len(nb) == 0:
-			nb_list.append(np.zeros((0, 2)))
-		else:
-			nb = np.array(nb)
-			tuples, weights = nb[:, 0].astype('int'), nb[:, 1].astype('float32')
-			unique_, inv = np.unique(tuples, return_inverse=True)
-			new_count = np.zeros_like(unique_, dtype='float32')
-			for i, iv in enumerate(inv):
-				new_count[iv] += weights[i]
-			if len(unique_) < num:
-				nb_list.append(list(unique_))
-			else:
-				order = np.argsort(new_count)[::-1]
-				nb_list.append(list(unique_[order[:num]]))
-	
-	return np.array(nb_list)
-
-
-def reduce_duplicate_normalize(list_of_nb, num=10):
-	nb_list = []
-	for nb in tqdm(list_of_nb):
-		if len(nb) == 0:
-			nb_list.append(np.zeros((0, 2)))
-		else:
-			nb = np.array(nb)
-			tuples, weights = nb[:, 0].astype('int'), nb[:, 1].astype('float32')
-			unique_, inv = np.unique(tuples, return_inverse=True)
-			new_count = np.zeros_like(unique_, dtype='float32')
-			for i, iv in enumerate(inv):
-				new_count[iv] += weights[i]
-			
-			if len(unique_) < num or num < 0:
-				# new_count /= np.sum(new_count)
-				nb_list.append(np.stack([unique_.astype('int'), new_count], axis=-1))
-			else:
-				cut_off = np.sort(new_count)[::-1]
-				cut_off = cut_off[num-1]
-				mask = new_count >= cut_off
-				nb_list.append(np.stack([unique_.astype('int')[mask], new_count[mask]], axis=-1))
-				
-			
-	
-	return np.array(nb_list)
 
 
 def reduce_duplicate_normalize_dict(list_of_nb, num=10):
@@ -621,61 +531,8 @@ def reduce_duplicate_normalize_dict(list_of_nb, num=10):
 	
 	return np.array(nb_list)
 
-def get_bin_neighbor_list_fast(data, weight, cell_neighbor_list, cell_neighbor_weight_list, samp_num=10, mem_efficient=False):
-	# Feed in data that has already + 1
-	print ("start getting neighbors")
-	weight_dict = {}
-	
-	for i in trange(len(cell_neighbor_list)):
-		for c,w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
-			weight_dict[(i, c)] = w
-	
-	cell_neighbor_list_inverse =  [[] for i in range(num[0] + 1)]
-	for i, cell_nbr in enumerate(cell_neighbor_list):
-		for c in cell_nbr:
-			cell_neighbor_list_inverse[c].append(i)
-	
-	size = (cell_num + 1) * (int(num_list[-1]) + 1)
-	neighbor_list = [[] for i in range(size)]
-	bulk_neighbor_list = [[] for i in range(int(num_list[-1]) + 1)]
-	count = 0
-	bar = 0.3
-	for datum, w in tqdm(zip(data, weight), total=len(data)):
-		for c in cell_neighbor_list_inverse[datum[0] + 1]:
-			balance_weight = weight_dict[(c, datum[0] + 1)]
-			neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1].append([datum[2] + 1, w * balance_weight])
-			neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1].append([datum[1] + 1, w * balance_weight])
-			# bulk_neighbor_list[datum[1] + 1].append([datum[2] + 1, w * balance_weight])
-			# bulk_neighbor_list[datum[2] + 1].append([datum[1] + 1, w * balance_weight])
-		count += 1
-		if mem_efficient:
-			if (count / len(data)) >= bar:
-				print ("mem efficient")
-				neighbor_list = reduce_duplicate_normalize(neighbor_list, -1)
-				neighbor_list = [list(a) for a in neighbor_list]
-				bar += 0.3
-				
-				
-	neighbor_list = reduce_duplicate_normalize(neighbor_list, samp_num)
-	# bulk_neighbor_list = reduce_duplicate_normalize(bulk_neighbor_list, samp_num)
-	
-	print(neighbor_list)
 
-	return neighbor_list, bulk_neighbor_list
-
-
-def get_bin_neighbor_list_dict_one(size, cell_neighbor_list_inverse, weight_dict, data, weight):
-	neighbor_list = [Counter() for i in range(size)]
-	
-	for datum, w in tqdm(zip(data, weight), total=len(data)):
-		for c in cell_neighbor_list_inverse[datum[0] + 1]:
-			balance_weight = weight_dict[(c, datum[0] + 1)]
-			neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1][datum[2] + 1] += w * balance_weight
-			neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1][datum[1] + 1] += w * balance_weight
-	return neighbor_list
-
-def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_weight_list, samp_num=10,
-                               mem_efficient=False):
+def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_weight_list, samp_num=10):
 	# Feed in data that has already + 1
 	print("start getting neighbors")
 	weight_dict = {}
@@ -692,28 +549,6 @@ def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_w
 	size = (cell_num + 1) * (int(num_list[-1]) + 1)
 	neighbor_list = [Counter() for i in range(size)]
 	bulk_neighbor_list = []
-	#
-	# p_list = []
-	# pool = ProcessPoolExecutor(max_workers=4)
-	#
-	# inds = np.array_split(np.arange(len(data)), 4)
-	# for ind in inds:
-	# 	p_list.append(pool.submit(get_bin_neighbor_list_dict_one, size, cell_neighbor_list_inverse, weight_dict, data[ind], weight[ind]))
-	#
-	# first = True
-	#
-	# for p in as_completed(p_list):
-	# 	if first:
-	# 		neighbor_list = p.result()
-	# 		print ("get the first")
-	# 		first = False
-	# 	else:
-	# 		a = p.result()
-	# 		print ("get one")
-	# 		for i in trange(len(neighbor_list)):
-	# 			neighbor_list[i] += a[i]
-	# 		del a, p
-	# pool.shutdown(wait=True)
 	
 
 	for datum, w in tqdm(zip(data, weight), total=len(data)):
@@ -721,12 +556,9 @@ def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_w
 			balance_weight = weight_dict[(c, datum[0] + 1)]
 			neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1][datum[2] + 1] += w * balance_weight
 			neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1][datum[1] + 1] +=  w * balance_weight
-		# bulk_neighbor_list[datum[1] + 1].append([datum[2] + 1, w * balance_weight])
-		# bulk_neighbor_list[datum[2] + 1].append([datum[1] + 1, w * balance_weight])
 
 	
 	neighbor_list = reduce_duplicate_normalize_dict(neighbor_list, samp_num)
-	# bulk_neighbor_list = reduce_duplicate_normalize(bulk_neighbor_list, samp_num)
 	
 	print(neighbor_list)
 	
@@ -767,15 +599,6 @@ def mp_impute(config_path, path, name, mode):
 
 
 def get_neighbor_mask():
-	
-	# neighbor_mask = np.zeros((9, 3), dtype='int')
-	# count = 0
-	# for i in [-1, 0, 1]:
-	# 	for j in [-1, 0, 1]:
-	# 		neighbor_mask[count, 1] += i
-	# 		neighbor_mask[count, 2] += j
-	# 		count += 1
-	# return neighbor_mask
 	neighbor_mask = np.zeros((5, 3), dtype='int')
 	count = 0
 	for i in [-1, 0, 1]:
@@ -822,19 +645,14 @@ if __name__ == '__main__':
 	neighbor_num = config['neighbor_num']
 	local_transfer_range = config['local_transfer_range']
 	config_name = config['config_name']
-	
+	rank_thres =  config['rank_thres']
+	mode = config["loss_mode"]
 	embedding_name = config['embedding_name']
+	
 	if "coassay" in config:
 		coassay = config['coassay']
 	else:
 		coassay = False
-		
-	if "clustering" in config:
-		clustering_flag = True
-	else:
-		clustering_flag = False
-	mode = "classification"
-	mode = "rank"
 	
 	max_distance = config['maximum_distance']
 	if max_distance < 0:
@@ -855,7 +673,7 @@ if __name__ == '__main__':
 	
 	#Training related parameters, but these are hard coded as they usually don't require tuning
 	# collect_num=x means, one cpu thread would collect x batches of samples
-	collect_num = 1
+	collect_num = 5
 	update_num_per_training_epoch = 1000
 	update_num_per_eval_epoch = 10
 	
@@ -871,17 +689,11 @@ if __name__ == '__main__':
 	data = np.load(os.path.join(temp_dir, "filter_data.npy")).astype('int')
 	weight = np.load(os.path.join(temp_dir, "filter_weight.npy")).astype('float32')
 	
-	# # normalize by cell
-	# print ("normalize by cell")
-	# for cell in trange(cell_num):
-	# 	weight[data[:, 0] == cell] /= (np.sum(weight[data[:, 0] == cell]) / 1000)
-	#
-	
 	
 	index = np.arange(len(data))
 	np.random.shuffle(index)
-	train_index = index[:int(0.75 * len(index))]
-	test_index = index[int(0.75 * len(index)):]
+	train_index = index[:int(0.85 * len(index))]
+	test_index = index[int(0.85 * len(index)):]
 	
 	
 	
@@ -897,11 +709,12 @@ if __name__ == '__main__':
 	total_possible *= cell_num
 	sparsity = len(data) / total_possible
 	print("sparsity", sparsity, len(data), total_possible)
+	
+	
 	neighbor_mask = get_neighbor_mask()
-	# neighbor_mask = np.zeros((1, 3), dtype='int')
+	
 	if sparsity > 0.35:
 		neg_num = 1
-		# neighbor_mask = np.zeros((1, 3), dtype='int')
 	elif sparsity > 0.25:
 		neg_num = 2
 	elif sparsity > 0.2:
@@ -958,7 +771,7 @@ if __name__ == '__main__':
 	except:
 		cell_feats = None
 	print ("cell_feats", cell_feats)
-	embeddings_initial, attribute_dict, targets_initial = generate_embeddings()
+	embeddings_initial, attribute_dict, targets_initial = generate_attributes()
 	
 	# Add 1 for the padding index
 	print("adding pad idx")
@@ -1032,6 +845,8 @@ if __name__ == '__main__':
 	cell_neighbor_list = [[i] for i in range(num[0] + 1)]
 	cell_neighbor_weight_list = [[1] for i in range(num[0] + 1)]
 	
+	
+	# First round, no cell dependent GNN
 	if training_stage <= 1:
 		# Training Stage 1
 		train(higashi_model,
@@ -1085,6 +900,7 @@ if __name__ == '__main__':
 	higashi_model.encode1.dynamic_nn = node_embedding2
 	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
 	
+	# Second round, with cell dependent GNN, but no neighbors
 	if training_stage <= 2:
 		# Training Stage 2
 		train(higashi_model,
@@ -1103,9 +919,7 @@ if __name__ == '__main__':
 		torch.save(higashi_model, save_path + "_stage2_model")
 		impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_1l" %(embedding_name, 1), mode)
 	
-	#
-	# if training_stage <= 2:
-	# 	impute_process(args.config, higashi_model, "%s_nbr_%d_impute_1l" % (embedding_name, 1), mode)
+	
 	# Loading Stage 2
 	checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
