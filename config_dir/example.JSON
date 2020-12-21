@@ -24,5 +24,11 @@
   "optional_smooth": false,
   "optional_quantile": false,
   "rank_thres": 1,
-  "loss_mode": "rank"
+  "loss_mode": "rank",
+  "cpu_num": -1,
+  "gpu_num": 8,
+  "optional_smooth": false,
+  "optional_quantile": true,
+  "rank_thres": 1,
+  "loss_mode": "classification"
 }
