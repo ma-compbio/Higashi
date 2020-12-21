@@ -80,18 +80,18 @@ def get_neighbor(x, neighbor_mask):
 	return result
 
 def build_hash(data,compress,forward=True):
-	neighbor_mask = np.zeros((9, 3), dtype='int')
+	# neighbor_mask = np.zeros((9, 3), dtype='int')
 	count = 0
 	if forward:
 		func_ = pass_
 	else:
 		func_ = tqdm
-	for i in [-1, 0, 1]:
-		for j in [-1, 0, 1]:
-			neighbor_mask[count, 1] += i
-			neighbor_mask[count, 2] += j
-			count += 1
-	neighbor_mask = np.zeros((1,3), dtype='int')
+	# for i in [-1, 0, 1]:
+	# 	for j in [-1, 0, 1]:
+	# 		neighbor_mask[count, 1] += i
+	# 		neighbor_mask[count, 2] += j
+	# 		count += 1
+	# neighbor_mask = np.zeros((1,3), dtype='int')
 			
 	if compress:
 		dict1 = ScalableBloomFilter(error_rate=1e-4,initial_capacity=1000000)
@@ -100,11 +100,11 @@ def build_hash(data,compress,forward=True):
 
 	for datum in func_(data):
 		# We need sort here to make sure the order is right
-		# datum.sort()
-		# dict1.add(tuple(datum))
+		datum.sort()
+		dict1.add(tuple(datum))
 	
-		nbs = get_neighbor(datum, neighbor_mask)
-		dict1.update(nbs)
+		# nbs = get_neighbor(datum, neighbor_mask)
+		# dict1.update(nbs)
 			
 	del data
 	return dict1

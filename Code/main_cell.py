@@ -96,8 +96,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	
 	batch_num = int(update_num_per_training_epoch / collect_num)
 	
-	# pool = ProcessPoolExecutor(max_workers=int(cpu_num*1.5))
-	pool = ProcessPoolExecutor(max_workers=1)
+	pool = ProcessPoolExecutor(max_workers=int(cpu_num*1.5))
 	p_list = []
 	y_list, pred_list = [], []
 	
@@ -468,7 +467,7 @@ def generate_attributes():
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
-		a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
+		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
 	pca_after = np.concatenate(pca_after, axis=-1).astype('float32')
 	
@@ -613,7 +612,6 @@ def get_neighbor_mask():
 
 if __name__ == '__main__':
 	
-	cpu_num = min(45,int(mp.cpu_count()))
 	if torch.cuda.is_available():
 		current_device = get_free_gpu()
 	else:
@@ -623,14 +621,14 @@ if __name__ == '__main__':
 	global pair_ratio
 	
 	
-	print("cpu_num", cpu_num)
+	
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	print ("device", device)
 	warnings.filterwarnings("ignore")
 	rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 	resource.setrlimit(resource.RLIMIT_NOFILE, (3600, rlimit[1]))
 	
-	impute_pool = ProcessPoolExecutor(max_workers=3)
+	
 	
 	# Get parameters from config file
 	args = parse_args()
@@ -640,13 +638,25 @@ if __name__ == '__main__':
 	temp_dir = config['temp_dir']
 	chrom_list = config['chrom_list']
 	print (chrom_list)
+	
+	cpu_num = config['cpu_num']
+	if cpu_num < 0:
+		cpu_num = int(mp.cpu_count())
+	print("cpu_num", cpu_num)
+	
+	gpu_num = config['gpu_num']
+	if gpu_num < 2:
+		non_para_impute = True
+	else:
+		non_para_impute = False
+		impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
+	print("cpu_num", cpu_num)
 	dimensions = config['dimensions']
 	impute_list = config['impute_list']
 	res = config['resolution']
 	neighbor_num = config['neighbor_num']
 	local_transfer_range = config['local_transfer_range']
 	config_name = config['config_name']
-	
 	mode = config["loss_mode"]
 	if mode == 'rank':
 		rank_thres = config['rank_thres']
@@ -919,8 +929,11 @@ if __name__ == '__main__':
 	
 	if training_stage <= 2:
 		# Impute Stage 2
-		torch.save(higashi_model, save_path + "_stage2_model")
-		impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_1l" %(embedding_name, 1), mode)
+		if non_para_impute:
+			impute_process(args.config, higashi_model, "%s_nbr_%d_impute_1l"  % (embedding_name, 1), mode)
+		else:
+			torch.save(higashi_model, save_path + "_stage2_model")
+			impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_1l" %(embedding_name, 1), mode)
 	
 	
 	# Loading Stage 2
