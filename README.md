@@ -199,7 +199,7 @@ bokeh serve --port={PORT} --address=0.0.0.0 --allow-websocket-origin=*:5012 Higa
 ```
 Finally, open a browser and go to `{IP}:{PORT}/Higashi_vis`. If you are running the program with a PC, the `{IP}` can just be localhost. If you are running this on a server, `{IP}` would be the ip address of the server. 
 If you see the following interface, you have successfully launched the visualization tool.
-
+![figs/screen.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen1.png)
 A detailed tutorial on the functions of this visualization tool, can be found at [Here](https://github.com/ma-compbio/Higashi/tree/main/Code/Higashi_vis) (in progress)
 ## Cite
 
