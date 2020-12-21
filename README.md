@@ -84,7 +84,7 @@ All customizable parameters are stored in a JSON config file. An example config 
 | params       |Type | description                  | example                   |
 |--------------|-----|------------------------------|---------------------------|
 | config_name| str| Name of this configuration, will be used in visualization tool |"sn-m3C-seq-with_meth"
-|  data_dir| str| Directory where the data are stored | "/work/magroup/ruochiz/Data/scHiC_collection/sn-m3C-seq"
+|  data_dir| str| Directory where the data are stored | "/sn-m3C-seq"
 |  temp_dir| str| Directory where the temporary files will be stored. An empty folder will be created if it doesn't exists. | "../Temp/sn-m3C_1Mb"
 |  genome_reference_path| str| Path of the genome reference file from USCS  Genome Browser, will be usde to generate bin nodes | "../hg19.chrom.sizes.txt"
 |  cytoband_path| str|Path of the cytoband reference file from USCS Genome Browser, will be used to remove centromere regions | "../cytoBand_hg19.txt"
