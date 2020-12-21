@@ -204,17 +204,6 @@ If you see the following interface, you have successfully launched the visualiza
 
 A detailed tutorial on the functions of this visualization tool can be found at [Here](https://github.com/ma-compbio/Higashi/tree/main/Code/Higashi_vis) (still in progress)
 
----------
-
-Our lab has also developed a powerful multimodal nteractive data visualization and exploration platform named [Nucleom Browser](http://vis.nucleome.org/entry/home) to integrate genomic, imaging, and 3D genome structure data. 
-**Nucleom Browser** will support the visualization of scHi-C data and Higashi analysis results in the future.
-
-Please check out:
-- [Home page](http://vis.nucleome.org/entry/home)
-- [Documentation](https://nb-docs.readthedocs.io/en/latest/)
-- [Source code](https://github.com/nucleome)
-
-![figs/screen2.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen2.png)
 
 ## Cite
 
