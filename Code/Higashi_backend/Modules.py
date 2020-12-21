@@ -7,7 +7,6 @@ import time
 from torch.nn.utils.rnn import pad_sequence
 cpu_num = multiprocessing.cpu_count()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = 'cpu'
 device_ids = [0, 1]
 
 activation_func = swish
@@ -77,14 +76,16 @@ class SparseEmbedding(nn.Module):
 
 # Deep Auto-encoder with tied or partial tied weights (reduce the number of parameters to be trained)
 class TiedAutoEncoder(nn.Module):
-	def __init__(self, shape_list,
+	def __init__(self, shape_list: list,
 				 use_bias=True,
-				 tied_list=[],
+				 tied_list=None,
 				 add_activation=False,
 				 dropout=None,
 				 layer_norm=False):
 		
 		super().__init__()
+		if tied_list is None:
+			tied_list = []
 		self.add_activation = add_activation
 		self.weight_list = []
 		self.reverse_weight_list = []
@@ -94,17 +95,20 @@ class TiedAutoEncoder(nn.Module):
 		
 		# Generating weights for the tied autoencoder
 		for i in range(len(shape_list) - 1):
-			p = nn.parameter.Parameter(torch.FloatTensor(shape_list[i + 1], shape_list[i]).to(device))
+			p = nn.parameter.Parameter(torch.ones([int(shape_list[i + 1]),
+			                                             int(shape_list[i])]).float().to(device))
 			self.weight_list.append(p)
 			if i not in tied_list:
 				self.reverse_weight_list.append(
-					nn.parameter.Parameter(torch.FloatTensor(shape_list[i + 1], shape_list[i]).to(device)))
+					nn.parameter.Parameter(torch.ones([int(shape_list[i + 1]),
+			                                             int(shape_list[i])]).to(device)))
 			else:
 				self.reverse_weight_list.append(p)
 				
-			self.bias_list.append(nn.parameter.Parameter(torch.FloatTensor(shape_list[i + 1]).to(device)))
-			self.recon_bias_list.append(nn.parameter.Parameter(torch.FloatTensor(shape_list[i]).to(device)))
+			self.bias_list.append(nn.parameter.Parameter(torch.ones([int(shape_list[i + 1])]).float().to(device)))
+			self.recon_bias_list.append(nn.parameter.Parameter(torch.ones([int(shape_list[i])]).float().to(device)))
 		
+		# reverse the order of the decoder.
 		self.recon_bias_list = self.recon_bias_list[::-1]
 		self.reverse_weight_list = self.reverse_weight_list[::-1]
 		
@@ -112,7 +116,10 @@ class TiedAutoEncoder(nn.Module):
 		self.reverse_weight_list = nn.ParameterList(self.reverse_weight_list)
 		self.bias_list = nn.ParameterList(self.bias_list)
 		self.recon_bias_list = nn.ParameterList(self.recon_bias_list)
+		
+		# Initialize the parameters
 		self.reset_parameters()
+		
 		if dropout is not None:
 			self.dropout = nn.Dropout(dropout)
 		else:
@@ -126,28 +133,18 @@ class TiedAutoEncoder(nn.Module):
 	
 	def reset_parameters(self):
 		for i, w in enumerate(self.weight_list):
-			# torch.nn.init.kaiming_uniform_(self.weight_list[i], a=math.sqrt(5))
 			nn.init.kaiming_uniform_(self.weight_list[i], a=0.0, mode='fan_in', nonlinearity='leaky_relu')
-			
-			
-			# nn.init.xavier_uniform_(self.weight_list[i], gain=nn.init.calculate_gain('tanh'))
-			
-			# torch.nn.init.kaiming_uniform_(self.reverse_weight_list[i], a=math.sqrt(5))
 			nn.init.kaiming_uniform_(self.reverse_weight_list[i], a=0.0, mode='fan_out', nonlinearity='leaky_relu')
-			
-			# nn.init.xavier_uniform_(self.reverse_weight_list[i], gain=nn.init.calculate_gain('tanh'))
-			# print(self.weight_list[i].data)
 			
 		for i, b in enumerate(self.bias_list):
 			fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.weight_list[i])
-			bound = 1 / math.sqrt(fan_in) #/ 10
+			bound = 1 / math.sqrt(fan_in)
 			torch.nn.init.uniform_(self.bias_list[i], -bound, bound)
 		
 		temp_weight_list = self.weight_list[::-1]
 		for i, b in enumerate(self.recon_bias_list):
 			fan_in, fan_out = torch.nn.init._calculate_fan_in_and_fan_out(temp_weight_list[i])
-			bound = 1 / math.sqrt(fan_out) #/ 10
-			# print ("bound", bound)
+			bound = 1 / math.sqrt(fan_out)
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
 	
 	def encoder(self, input):
@@ -205,20 +202,21 @@ class TiedAutoEncoder(nn.Module):
 		else:
 			return encoded_feats
 	
-	def fit(self, data, epochs=10, sparse=True, sparse_rate=None, classifier=False, early_stop=True, batch_size=-1, targets=None):
+	def fit(self, data: np.ndarray,
+	        epochs=10, sparse=True, sparse_rate=None, classifier=False, early_stop=True, batch_size=-1, targets=None):
 		for name, param in self.named_parameters():
 			print(name, param.requires_grad, param.shape)
 			
-		optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3, weight_decay=1e-5)
+		optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
 		data = torch.from_numpy(data).to(device)
 		
 		if batch_size < 0:
-			batch_size = len(data)
+			batch_size = int(len(data))
 		bar = trange(epochs, desc="")
 		
 		no_improve_count = 0
 		for i in bar:
-			batch_index = torch.randint(0, len(data), (batch_size,)).to(device)
+			batch_index = torch.randint(0, int(len(data)), (batch_size,)).to(device)
 			encode, recon = self.forward(data[batch_index], return_recon=True)
 			optimizer.zero_grad()
 			
@@ -405,130 +403,19 @@ class AutoEncoder(nn.Module):
 		torch.cuda.empty_cache()
 		return encode.cpu().detach().numpy()
 
-	
-class ConvAutoEncoder(nn.Module):
-	def __init__(self, shape_list,
-				 dropout=None, input_length=1, bottle_neck=1):
-		super(ConvAutoEncoder, self).__init__()
-		self.shape_list = shape_list
-		self.encoder_list = []
-		self.decoder_list = []
-		
-		for i in range(len(shape_list) - 1):
-			self.encoder_list.append(nn.Conv1d(shape_list[i], shape_list[i+1], kernel_size=21, stride=21, dilation=2, padding_mode='zeros').to(device))
-			self.decoder_list.append(nn.ConvTranspose1d(shape_list[i+1], shape_list[i], kernel_size=21, stride=21, dilation=2, padding_mode='zeros').to(device))
-
-		
-		test_input = torch.zeros([1, 1, input_length]).float().to(device)
-		for i in range(len(self.encoder_list)):
-			test_input = self.encoder_list[i](test_input)
-		size1 = test_input.view(-1).shape[0]
-		print ("conv autoencoder bottleneck", test_input.shape)
-		self.encoder_list.append(nn.Linear(size1, bottle_neck))
-		self.decoder_list.append(nn.Linear(bottle_neck, size1))
-		self.decoder_list = self.decoder_list[::-1]
-		self.encoder_list = nn.ModuleList(self.encoder_list)
-		self.decoder_list = nn.ModuleList(self.decoder_list)
-		
-		if dropout is not None:
-			self.dropout = nn.Dropout(dropout)
-		else:
-			self.dropout = dropout
-	
-	def encoder(self, input):
-		encoded_feats = input[:, None, :]
-		for i in range(len(self.encoder_list)-1):
-			encoded_feats = self.encoder_list[i](encoded_feats)
-			encoded_feats = activation_func(encoded_feats)
-			if self.dropout is not None:
-				encoded_feats = self.dropout(encoded_feats)
-		encoded_feats = encoded_feats.view(len(encoded_feats), -1)
-		encoded_feats = self.encoder_list[-1](encoded_feats)
-		encoded_feats = activation_func(encoded_feats)
-		return encoded_feats
-	
-	def decoder(self, encoded_feats):
-		reconstructed_output = encoded_feats
-		reconstructed_output = self.decoder_list[0](reconstructed_output)
-		reconstructed_output = activation_func(reconstructed_output)
-		reconstructed_output = reconstructed_output.view(len(reconstructed_output), self.shape_list[-1], -1)
-		for i in range(len(self.decoder_list)-1):
-			reconstructed_output = self.decoder_list[i+1](reconstructed_output)
-			if i < len(self.decoder_list) - 1:
-				reconstructed_output = activation_func(reconstructed_output)
-		return reconstructed_output[:, 0, :]
-	
-	def forward(self, input, return_recon=False):
-		encoded_feats = self.encoder(input)
-		if return_recon:
-			reconstructed_output = activation_func(encoded_feats)
-			
-			if self.dropout is not None:
-				reconstructed_output = self.dropout(reconstructed_output)
-			
-			reconstructed_output = self.decoder(reconstructed_output)
-			
-			return encoded_feats, reconstructed_output
-		else:
-			return encoded_feats
-	
-	def fit(self, data, epochs=10, early_stop=True, batch_size=32):
-		for name, param in self.named_parameters():
-			print(name, param.requires_grad, param.shape)
-		
-		optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-		data \
-			= torch.from_numpy(data).to(device)
-		bar = trange(epochs, desc="")
-		
-		loss_best = 1e5
-		no_improve_count = 0
-		for i in bar:
-			batch_index = torch.randint(0, len(data), (batch_size,)).to(device)
-			encode, recon = self.forward(data[batch_index], return_recon=True)
-			optimizer.zero_grad()
-			
-			
-			loss = F.mse_loss(recon, data[batch_index, :recon.shape[-1]], reduction="mean")
-			
-			loss.backward()
-			optimizer.step()
-			
-			if early_stop:
-				if i >= 50:
-					if loss.item() < loss_best * 0.99:
-						loss_best = loss.item()
-						no_improve_count = 0
-					else:
-						no_improve_count += 1
-					if no_improve_count >= 30:
-						break
-			
-			bar.set_description("%.3f" % (loss.item()), refresh=False)
-		
-		print("loss", loss.item(), "loss best", loss_best, "epochs", i)
-		print()
-		torch.cuda.empty_cache()
-	
-	def predict(self, data, batch_size=32):
-		self.eval()
-		data = torch.from_numpy(data).to(device)
-		encode_list = []
-		with torch.no_grad():
-			for i in range(int(math.ceil(len(data) / batch_size))):
-				encode = self.forward(data[i*batch_size:(i+1)*batch_size])
-				encode_list.append(encode.detach().cpu().numpy())
-		self.train()
-		torch.cuda.empty_cache()
-		return np.concatenate(encode_list, axis=0)
-	
-	
+# Multiple Embedding is a module that passes nodes to different branch of neural network to generate embeddings
+# The neural network to use would be dependent to the node ids (the input num_list parameters)
+# If the num_list is [0, 1000, 2000,...,]
+# Then node 0~1000 would pass through NN1, 1000~200 would pass through NN2...
+# target weights represent the auxilary task that the embedding would do.
 class MultipleEmbedding(nn.Module):
 	def __init__(self, embedding_weights, dim, sparse=True, num_list=None, target_weights=None):
 		
 		super().__init__()
+		
 		if target_weights is None:
 			target_weights = embedding_weights
+		
 		self.dim = dim
 		self.num_list = torch.tensor([0] + list(num_list)).to(device)
 		
@@ -560,16 +447,10 @@ class MultipleEmbedding(nn.Module):
 		self.targets = []
 		complex_flag = False
 		for i, w in enumerate(target_weights):
-			try:
-				self.targets.append(SparseEmbedding(w, sparse))
-			except BaseException as e:
-				print("Complex target Mode")
-				self.targets.append(w)
-				complex_flag = True
+			self.targets.append(SparseEmbedding(w, sparse))
 		
-		if complex_flag:
-			self.targets = nn.ModuleList(self.targets)
-			
+		
+		# Generate a test id to test the output size of each embedding modules.
 		test = torch.zeros(1, device=device).long()
 		self.input_size = []
 		for w in self.embeddings:
@@ -583,13 +464,11 @@ class MultipleEmbedding(nn.Module):
 		self.wstack = []
 		for i in range(len(self.embeddings)):
 			if self.input_size[i] == target_weights[i].shape[-1]:
-				self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[0], layer_norm=False))
+				self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[0]))
 			else:
-				self.wstack.append(AutoEncoder([self.input_size[i], self.dim * 2,self.dim],[self.dim, target_weights[i].shape[-1]],add_activation=True))
+				self.wstack.append(AutoEncoder([self.input_size[i], self.dim],[self.dim, target_weights[i].shape[-1]],add_activation=True))
 		
 		
-		# self.wstack = [TiedAutoEncoder([self.input_size[i], self.dim, self.dim],add_activation=True, tied_list=[0])
-		#                                    for i, w in enumerate(self.embeddings)]
 		self.wstack = nn.ModuleList(self.wstack)
 		self.on_hook_embedding = nn.ModuleList([nn.Sequential(w,
 														 self.wstack[i]
@@ -621,18 +500,21 @@ class MultipleEmbedding(nn.Module):
 					raise EOFError
 			else:
 				final[mask] = self.off_hook_embedding[i](x[mask] - self.num_list[i] - 1)
-		# final = self.layer_norm(final)
+				
 		if reshape_flag:
 			final = final.view(sz_b, len_seq, -1)
 		
 		return final
 	
+	# No longer do BP through a list of embedding modules.
 	def off_hook(self, off_hook_list=[]):
 		if len(off_hook_list) == 0:
 			off_hook_list = list(range(len(self.wstack)))
 		for index in off_hook_list:
 			ae = self.wstack[index]
 			for w in ae.weight_list:
+				w.requires_grad = False
+			for w in ae.reverse_weight_list:
 				w.requires_grad = False
 			for b in ae.bias_list:
 				b.requires_grad = False
@@ -651,6 +533,8 @@ class MultipleEmbedding(nn.Module):
 		for index in on_hook_list:
 			ae = self.wstack[index]
 			for w in ae.weight_list:
+				w.requires_grad = True
+			for w in ae.reverse_weight_list:
 				w.requires_grad = True
 			for b in ae.bias_list:
 				b.requires_grad = True
@@ -677,7 +561,7 @@ class Hyper_SAGNN(nn.Module):
 			diag_mask,
 			bottle_neck,
 			attribute_dict=None,
-			bias_feats=None,
+			cell_feats=None,
 			encoder_dynamic_nn=None,
 			encoder_static_nn=None):
 		super().__init__()
@@ -698,17 +582,7 @@ class Hyper_SAGNN(nn.Module):
 			bottle_neck=bottle_neck,
 			dynamic_nn=encoder_dynamic_nn,
 			static_nn=encoder_static_nn)
-		# self.encode2 = EncoderLayer(
-		# 	n_head,
-		# 	d_model,
-		# 	d_k,
-		# 	d_v,
-		# 	dropout_mul=0.3,
-		# 	dropout_pff=0.4,
-		# 	diag_mask=diag_mask,
-		# 	bottle_neck=d_model,
-		# 	dynamic_nn=None,
-		# 	static_nn=None)
+		
 		self.diag_mask_flag = diag_mask
 		
 		self.layer_norm1 = nn.LayerNorm(d_model)
@@ -726,11 +600,11 @@ class Hyper_SAGNN(nn.Module):
 			self.final_proba = nn.Linear(17, 1)
 	
 	
-		if bias_feats is not None:
-			self.bias_feats = torch.from_numpy(bias_feats).to(device)
+		if cell_feats is not None:
+			self.cell_feats = torch.from_numpy(cell_feats).to(device)
 			self.extra_nn = nn.Linear(1, 1)
 		else:
-			self.bias_feats = None
+			self.cell_feats = None
 			self.extra_nn = nn.Linear(1, 1)
 	
 	def get_embedding(self, x, slf_attn_mask=None, non_pad_mask=None):
@@ -753,11 +627,12 @@ class Hyper_SAGNN(nn.Module):
 		else:
 			distance_proba = torch.zeros((len(x), 1), dtype=torch.float, device=device)
 		
-		if self.bias_feats is not None:
-			bias_feats = self.bias_feats[x[:, 0]]
+		if self.cell_feats is not None:
+			cell_feats = self.cell_feats[x[:, 0]]
 		else:
-			bias_feats = torch.ones((len(x)), 1)
-		bias_feats = self.extra_nn(bias_feats)
+			cell_feats = torch.ones((len(x)), 1)
+			
+		cell_feats = self.extra_nn(cell_feats)
 		slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
 		non_pad_mask = get_non_pad_mask(x)
 		
@@ -777,10 +652,9 @@ class Hyper_SAGNN(nn.Module):
 		mask_sum = torch.sum(non_pad_mask, dim=-2, keepdim=False)
 		output /= mask_sum
 		
-		# print (bias_feats)
+		# print (cell_feats)
 		
-		output = output + distance_proba + bias_feats
-		# print (output.shape, bias_feats.shape)
+		output = output + distance_proba + cell_feats
 		
 		return output
 	
@@ -1133,80 +1007,9 @@ class EncoderLayer(nn.Module):
 		
 		return dynamic, static1, attn
 
-
+# Sampling positive triplets.
+# THe number of triplets from each chromosome is balanced across different chromosome
 class DataGenerator():
-	def __init__(self, edges, edge_weight, batch_size, num_batch_per_iter, flag=False):
-		self.batch_size = batch_size
-		self.num_batch_per_iter = num_batch_per_iter
-		self.flag = flag
-		
-		self.edges = edges
-		self.edge_weight = edge_weight
-		
-		self.cell_list = np.unique(self.edges[:, 0])
-		
-		while len(self.edges) <= (self.num_batch_per_iter * self.batch_size):
-			self.edges = np.concatenate([self.edges, self.edges])
-			self.edge_weight = np.concatenate([self.edge_weight, self.edge_weight])
-		
-		self.pointer = 0
-		
-		self.shuffle()
-	
-	def shuffle(self):
-		index = np.random.permutation(len(self.edges))
-		self.edges = self.edges[index]
-		self.edge_weight = self.edge_weight[index]
-	
-	def next_iter(self):
-		# if self.flag:
-		#     index = self.balance_num(self.edges)
-		#     edges = self.edges[index]
-		#     edge_weight = self.edge_weight[index]
-		#     return edges, edge_weight
-		
-		# cell = np.random.choice(self.cell_list)
-		# mask = self.edges[:, 0] == cell
-		# e, w = self.edges[mask], self.edge_weight[mask]
-		# index = np.random.permutation(len(e))[:self.num_batch_per_iter * self.batch_size]
-		# e = e[index]
-		# w = w[index]
-		# return e,w
-		
-		self.pointer += self.num_batch_per_iter * self.batch_size
-		
-		if self.pointer <= len(self.edges):
-			index = range(self.pointer - self.num_batch_per_iter * self.batch_size, min(self.pointer, len(self.edges)))
-			edges = self.edges[index]
-			edge_weight = self.edge_weight[index]
-			return edges, edge_weight
-		else:
-			# print(self.pointer, len(self.edges))
-			index = range(self.pointer - self.num_batch_per_iter * self.batch_size, min(self.pointer, len(self.edges)))
-			edges = self.edges[index]
-			edge_weight = self.edge_weight[index]
-			
-			self.shuffle()
-			left = self.num_batch_per_iter * self.batch_size - len(index)
-			self.pointer = 0
-			self.pointer += left
-			index = range(0, self.pointer)
-			
-			return np.concatenate([edges, self.edges[index]]), np.concatenate([edge_weight, self.edge_weight[index]])
-	
-	def balance_num(self, edges):
-		cell = edges[:, 0]
-		final = []
-		choice, counts_ = np.unique(cell, return_counts=True)
-		# num = int(np.mean(counts_))
-		num = 50
-		for c in tqdm(choice):
-			final.append(np.random.choice(np.where(cell == c)[0], num, replace=True))
-		final = np.concatenate(final, axis=-1)
-		return final
-
-
-class DataGenerator_chrom():
 	def __init__(self, edges, edge_weight, batch_size, flag=False, num_list=None):
 		self.batch_size = batch_size
 		self.flag = flag
@@ -1258,7 +1061,6 @@ class DataGenerator_chrom():
 			w_list.append(w)
 		e = np.concatenate(e_list, axis=0)
 		w = np.concatenate(w_list, axis=0)
-		# print (e.shape, w.shape)
 		return e, w
 
 
@@ -1267,7 +1069,7 @@ class MeanAggregator(nn.Module):
 	Aggregates a node's embeddings using mean of neighbors' embeddings
 	"""
 	
-	def __init__(self, features, gcn=False, num_list=None, transfer_range=0, start_end_dict=None, pass_pseudo_id=False):
+	def __init__(self, features, gcn=False, num_list=None, start_end_dict=None, pass_pseudo_id=False):
 		"""
 		Initializes the aggregator for a specific graph.
 		features -- function mapping LongTensor of node ids to FloatTensor of feature values.
@@ -1280,7 +1082,6 @@ class MeanAggregator(nn.Module):
 		self.gcn = gcn
 		self.num_list = torch.as_tensor(num_list)
 		self.mask = None
-		self.transfer_range = transfer_range
 		self.start_end_dict = start_end_dict
 		
 		# If the feature function comes from a graphsage encoder, use the cell_id * (bin_num+1) + bin_id as the bin_id
@@ -1303,22 +1104,12 @@ class MeanAggregator(nn.Module):
 		_sample = random.sample
 		
 		magic_number = int(self.num_list[-1] + 1)
-		# nodes_real = nodes_real.cpu().numpy()
-		# tr = self.transfer_range
-		# start_end_dict = self.start_end_dict
 		
 		
 		sample_if_long_enough = lambda to_neigh : _sample(to_neigh, num_sample) if len(to_neigh) > num_sample else to_neigh
 
 		
 		
-		# if self.gcn and tr > 0:
-		# 	# if self.pass_pseudo_id:
-		# 	# 	nodes_real = (nodes % magic_number).cpu().numpy()
-		#
-		# 	samp_neighs = np.array([np.array(sample_if_long_enough(to_neigh) + add_local_tr(i))
-		# 	               for i, to_neigh in enumerate(to_neighs)])
-		# else:
 		samp_neighs = np.array([np.array(sample_if_long_enough(to_neigh)) for to_neigh in to_neighs])
 			
 		if self.pass_pseudo_id:
@@ -1382,7 +1173,7 @@ class MeanAggregator_with_weights(nn.Module):
 	Aggregates a node's embeddings using mean of neighbors' embeddings
 	"""
 	
-	def __init__(self, features, gcn=False, num_list=None, transfer_range=0, start_end_dict=None, pass_pseudo_id=False, remove=False, pass_remove=False):
+	def __init__(self, features, gcn=False, num_list=None, start_end_dict=None, pass_pseudo_id=False, remove=False, pass_remove=False):
 		"""
 		Initializes the aggregator for a specific graph.
 		features -- function mapping LongTensor of node ids to FloatTensor of feature values.
@@ -1395,7 +1186,6 @@ class MeanAggregator_with_weights(nn.Module):
 		self.gcn = gcn
 		self.num_list = torch.as_tensor(num_list)
 		self.mask = None
-		self.transfer_range = transfer_range
 		self.start_end_dict = start_end_dict
 		
 		# If the feature function comes from a graphsage encoder, use the cell_id * (bin_num+1) + bin_id as the bin_id
@@ -1420,9 +1210,6 @@ class MeanAggregator_with_weights(nn.Module):
 		
 		
 		magic_number = int(self.num_list[-1] + 1)
-		# nodes_real = nodes_real.cpu().numpy()
-		# tr = self.transfer_range
-		# start_end_dict = self.start_end_dict
 		
 		# sample_if_long_enough = lambda to_neigh: to_neigh[np.random.permutation(to_neigh.shape[0])[:num_sample]] if len(
 		# 	to_neigh) > num_sample else to_neigh
@@ -1496,16 +1283,8 @@ class MeanAggregator_with_weights(nn.Module):
 				row_indices.append(i)
 				
 			v.append(w)
-		# if len(v) > 0:
-		v = np.concatenate(v, axis=0)
 		
-		# dropout_rate = 0.2
-		# index = np.arange(len(unique_nodes_list))
-		# drop = np.random.choice(index, int(dropout_rate * len(index)), replace=False)
-		# mask = np.isin(np.array(column_indices), drop)
-		# # print (np.sum(mask), len(column_indices))
-		# v = np.array(v)
-		# v[mask] = 0.0
+		v = np.concatenate(v, axis=0)
 		
 		unique_nodes_list = torch.LongTensor(unique_nodes_list)
 		unique_real_nodes_list = (unique_nodes_list % magic_number).to(device)
@@ -1710,8 +1489,11 @@ class GraphSageEncoder_with_weights(nn.Module):
 		self.feat_dim = feature_dim
 		self.node2nbr = node2nbr
 		self.pass_pseudo_id = pass_pseudo_id
-		self.aggregator = MeanAggregator_with_weights(self.features, gcn, num_list, transfer_range, start_end_dict, pass_pseudo_id, remove, pass_remove)
-		self.linear_aggregator = MeanAggregator(self.linear_features, gcn, num_list, transfer_range, start_end_dict, pass_pseudo_id)
+		
+		# aggregator aggregates through hic graph
+		self.aggregator = MeanAggregator_with_weights(self.features, gcn, num_list, start_end_dict, pass_pseudo_id, remove, pass_remove)
+		# linear aggregator aggregats through 1D genomic neighbors
+		self.linear_aggregator = MeanAggregator(self.linear_features, gcn, num_list, start_end_dict, pass_pseudo_id)
 		
 		self.num_sample = num_sample
 		self.transfer_range = transfer_range

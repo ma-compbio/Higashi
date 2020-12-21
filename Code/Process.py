@@ -162,16 +162,16 @@ def create_matrix():
 		weight_within_chrom_list.append(temp_weight)
 	pool.shutdown(wait=True)
 	
-	bias_feats = []
+	cell_feats = []
 	for cell in trange(cell_num):
 		mask = data[:, 0] == cell
 		temp_weight = weight[mask]
 		
 		all_ = np.sum(temp_weight)
-		bias_feats.append([all_])
-	bias_feats = np.log10(np.array(bias_feats))
-	bias_feats = StandardScaler().fit_transform(bias_feats)
-	np.save(os.path.join(temp_dir, "bias_feats.npy"), bias_feats)
+		cell_feats.append([all_])
+	cell_feats = np.log10(np.array(cell_feats))
+	cell_feats = StandardScaler().fit_transform(cell_feats)
+	np.save(os.path.join(temp_dir, "cell_feats.npy"), cell_feats)
 	
 	
 	data = np.concatenate(data_within_chrom_list)
@@ -278,16 +278,6 @@ def conv_only(A):
 	conv_A = neighbor_ave_gpu2(A, pad)
 	return conv_A.cpu().numpy()
 
-# Below is for generating imputed results
-def generate_binpair(shape, min_bin_, max_bin_):
-	print(shape)
-	samples = []
-	for bin1 in range(shape):
-		for bin2 in range(bin1 + min_bin_, min(bin1 + max_bin_, shape)):
-			samples.append([bin1, bin2])
-	samples = np.array(samples)
-	return samples
-
 
 # Run schicluster for comparisons
 def impute_all():
@@ -309,8 +299,8 @@ def impute_all():
 		else:
 			max_bin_ = max_bin
 			
-		
-		samples = generate_binpair(a[0].shape[0], min_bin_, max_bin_)
+		# Minus one because the generate_binpair function would add one in the function
+		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % c), "w") as f:
 			f.create_dataset('coordinates', data = samples)
 			for i, m in enumerate(tqdm(a)):

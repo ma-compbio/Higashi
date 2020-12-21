@@ -340,9 +340,9 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 	# validation_data_generator = DataGenerator(validation_data, validation_weight, int(batch_size / (neg_num + 1)), 1,
 	#                                           False)
 	#
-	training_data_generator = DataGenerator_chrom(edges, edge_weight, int(batch_size / (neg_num + 1) * collect_num),
+	training_data_generator = DataGenerator(edges, edge_weight, int(batch_size / (neg_num + 1) * collect_num),
 	                                              True, num_list)
-	validation_data_generator = DataGenerator_chrom(validation_data, validation_weight, int(batch_size / (neg_num + 1)),
+	validation_data_generator = DataGenerator(validation_data, validation_weight, int(batch_size / (neg_num + 1)),
 	                                                False, num_list)
 	
 	if clustering_flag:
@@ -953,11 +953,11 @@ if __name__ == '__main__':
 	
 	print(train_data, test_data)
 	try:
-		bias_feats = np.load(os.path.join(temp_dir, "bias_feats.npy")).astype('float32')
-		bias_feats = np.concatenate([np.zeros((1, bias_feats.shape[-1])), bias_feats], axis=0).astype('float32')
+		cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
+		cell_feats = np.concatenate([np.zeros((1, cell_feats.shape[-1])), cell_feats], axis=0).astype('float32')
 	except:
-		bias_feats = None
-	print ("bias_feats", bias_feats)
+		cell_feats = None
+	print ("cell_feats", cell_feats)
 	embeddings_initial, attribute_dict, targets_initial = generate_embeddings()
 	
 	# Add 1 for the padding index
@@ -1009,7 +1009,7 @@ if __name__ == '__main__':
 		diag_mask=True,
 		bottle_neck=dimensions,
 		attribute_dict=attribute_dict,
-		bias_feats=bias_feats,
+		cell_feats=cell_feats,
 		encoder_dynamic_nn=node_embedding_init,
 		encoder_static_nn=node_embedding_init).to(device)
 	
@@ -1110,7 +1110,7 @@ if __name__ == '__main__':
 	checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
 	
-	validation_data_generator = DataGenerator_chrom(test_data, test_weight, int(batch_size / (neg_num + 1)),
+	validation_data_generator = DataGenerator(test_data, test_weight, int(batch_size / (neg_num + 1)),
 	                                                False, num_list)
 	train_bce_loss, _, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 	valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
