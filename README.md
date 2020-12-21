@@ -18,7 +18,6 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 --------------------------
 
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/Overview.png)
---------------------------
 
 
 ## Requirements
@@ -43,7 +42,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 
 **Note**: It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
 
---------------------------
+
 
 
 ## How to use
