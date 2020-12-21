@@ -174,7 +174,7 @@ In progress
 
 ## One more thing
 
-In Higashi, we also implemented a visualization tool which allows interactive navigation of the scHi-C analysis results. The visualization tool is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
+In Higashi, we also implemented a **visualization tool** which allows interactive navigation of the scHi-C analysis results. The visualization tool is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
 To launch the visualization tool, first create a `visual_config.JSON` file under the `config_dir`. 
 The directory structure should be
 ```
@@ -204,12 +204,16 @@ If you see the following interface, you have successfully launched the visualiza
 
 A detailed tutorial on the functions of this visualization tool, can be found at [Here](https://github.com/ma-compbio/Higashi/tree/main/Code/Higashi_vis) (still in progress)
 
+---------
+
 Our lab has also developed a powerful multi-modal visualization tool called [Nucleom Browser](http://vis.nucleome.org/entry/home), which will support the visualization of scHi-C data and Higashi analysis results in the future.
 
 Please check out:
-[Home page](http://vis.nucleome.org/entry/home)
-[Dovumentation](https://nb-docs.readthedocs.io/en/latest/)
-[Source code](https://github.com/nucleome)
+-[Home page](http://vis.nucleome.org/entry/home)
+-[Documentation](https://nb-docs.readthedocs.io/en/latest/)
+-[Source code](https://github.com/nucleome)
+
+![figs/screen2.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen2.png)
 
 ## Cite
 
