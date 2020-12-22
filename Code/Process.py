@@ -379,7 +379,9 @@ def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	temp /= (np.sum(temp, axis=-1, keepdims=True) + 1e-15)
 	if "optional_quantile" in config:
 		if config['optional_quantile']:
-			temp = quantileNormalize(temp)
+			temp1 = quantileNormalize(temp)
+			temp1[temp == 0]  = 0
+			temp = temp1
 	np.save(os.path.join(temp_dir, "%s_cell_feats.npy" % c), temp)
 
 	temp1 = PCA(n_components=size).fit_transform(temp).astype('float32')
@@ -470,7 +472,6 @@ config = get_config(args.config)
 chrom_list = config['chrom_list']
 res = config['resolution']
 res_cell = config['resolution_cell']
-bottle_neck = config['bottle_neck']
 scale_factor = int(res_cell / res)
 print ("scale_factor", scale_factor)
 
@@ -489,8 +490,6 @@ if not os.path.exists(cell_attr_dir):
 if not os.path.exists(bin_attr_dir):
 	os.mkdir(bin_attr_dir)
 
-
-contact_file_identifier = config['contact_file_identifier']
 genome_reference_path = config['genome_reference_path']
 
 if 'cpu_num' in config:

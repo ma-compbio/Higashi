@@ -49,7 +49,7 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 		adj = node_embedding_init.embeddings[0](cell_ids)
 		targets = node_embedding_init.targets[0](cell_ids)
 		_, recon = node_embedding_init.wstack[0](adj, return_recon=True)
-		mse_loss = F.mse_loss(recon, targets, reduction="sum") / len(adj)
+		mse_loss = F.mse_loss(recon, targets, reduction="sum") / len(adj) / adj.shape[-1] * 800
 	else:
 		mse_loss = torch.as_tensor([0], dtype=torch.float).to(device)
 		
