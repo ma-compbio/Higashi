@@ -327,13 +327,13 @@ def optional_impute_for_cell_adj():
 		
 		for i, m in enumerate(tqdm(a)):
 			b = m.reshape((int(np.sqrt(len(m))), -1))
-			
+			b = np.log(b+1)
 			sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
 			while sparsity < min(upsampling2 * 1.5, 1.0):
 				# print ("sparsity", sparsity)
 				b = conv_only(b)
 				sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
-			
+			b = np.exp(b) - 1
 			impute_list.append(b.reshape((-1)))
 			
 		impute_list = np.stack(impute_list, axis=0)
@@ -520,11 +520,11 @@ else:
 	min_bin = int(min_distance / res)
 print ("min bin", min_bin)
 
-
-generate_chrom_start_end()
-extract_table()
-create_matrix()
-impute_all()
+#
+# generate_chrom_start_end()
+# extract_table()
+# create_matrix()
+# impute_all()
 optional_smooth_flag = False
 if "optional_smooth" in config:
 	if config['optional_smooth']:

@@ -381,13 +381,13 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 		
 		# Dynamic pair ratio for stage one
 		if dynamic_pair_ratio:
-			if pair_ratio < 0.8:
+			if pair_ratio < 0.5:
 				pair_ratio += 0.1
-			elif pair_ratio > 0.8:
-				pair_ratio = 0.8
+			elif pair_ratio > 0.5:
+				pair_ratio = 0.5
 			print("pair_ratio", pair_ratio)
 		
-		if (not dynamic_pair_ratio) or pair_ratio == 0.8:
+		if (not dynamic_pair_ratio) or pair_ratio == 0.5:
 			valid_accus += [valid_auc2]
 			
 			if valid_auc2 >= max(valid_accus):
@@ -701,8 +701,11 @@ if __name__ == '__main__':
 	# Now start loading data
 	data = np.load(os.path.join(temp_dir, "filter_data.npy")).astype('int')
 	weight = np.load(os.path.join(temp_dir, "filter_weight.npy")).astype('float32')
-	
-	
+	print (data.shape)
+	# mask = weight >= 2
+	# data = data[mask]
+	# weight = weight[mask]
+	# print(data.shape)
 	index = np.arange(len(data))
 	np.random.shuffle(index)
 	train_index = index[:int(0.85 * len(index))]

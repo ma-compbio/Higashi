@@ -645,8 +645,9 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 			params = dict(config['UMAP_params'])
 			for key in params:
 				setattr(model, key, params[key])
-				
+		print (v)
 		v = model.fit_transform(v)
+		print (v)
 		x, y = v[:, 0], v[:, 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - UMAP finished" % timestr)
@@ -656,8 +657,8 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		model = TSNE(n_components=2, perplexity=50, n_jobs=-1)
 		if "TSNE_params" in config:
 			params = config['TSNE_params']
-			for key, v in params:
-				setattr(model, key, v)
+			for key in params:
+				setattr(model, key, params[key])
 		v = model.fit_transform(v)
 		x, y = v[:, 0], v[:, 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -837,7 +838,7 @@ color_selector = Select(title='color scheme', value="None", options=["None", "Ra
 
 
 
-size_selector = Slider(title='scatter size', value=7, start=1, end=20,step=1, width=150)
+size_selector = Slider(title='scatter size', value=4, start=1, end=20,step=1, width=150)
 
 
 data_selector = Select(title='scHi-C dataset', value=avail_data[0], options=avail_data, width=150)
