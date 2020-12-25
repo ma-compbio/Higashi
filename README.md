@@ -180,7 +180,7 @@ In progress
 
 --------------------
 
-## One more thing
+## One more thing (visualization of scHi-C & Higashi analysis)
 
 In Higashi, we also implemented a **visualization tool** which allows interactive navigation of the scHi-C analysis results. The visualization tool is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
 To launch the visualization tool, first create a `visual_config.JSON` file under the `config_dir`. 
@@ -204,7 +204,7 @@ The `visual_config.JSON` file has the following content:
 After that, just run the following commands
 ```bash
 cd Code
-bokeh serve --port={PORT} --address=0.0.0.0 --allow-websocket-origin=*:5012 Higashi_vis/
+bokeh serve --port={PORT} --address=0.0.0.0 --allow-websocket-origin=*:{PORT} Higashi_vis/
 ```
 Finally, open a browser and go to `{IP}:{PORT}/Higashi_vis`. If you are running the program with a PC, the `{IP}` can just be localhost. If you are running this on a server, `{IP}` would be the ip address of the server. 
 If you see the following interface, you have successfully launched the visualization tool.
