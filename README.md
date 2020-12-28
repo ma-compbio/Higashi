@@ -142,6 +142,7 @@ Fill in the `{CONFIG_PATH}` with the path to the configuration JSON file that yo
 - **(Optional)** quantile normalization
 - generate node attributes
 - **(Optional)** process co-assayed signals
+
 Before each step is executed, a message would be printed indicating the progress, which helps the debugging process.
 
 ### Step 4: Train the Higashi model
@@ -181,8 +182,11 @@ In progress
 --------------------
 
 ## One more thing (visualization of scHi-C & Higashi analysis)
-
-In Higashi, we also implemented a **visualization tool** which allows interactive navigation of the scHi-C analysis results. The visualization tool is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
+<img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo_vis.png" align="right"
+     alt="logo" width="290">
+     
+In Higashi, we also implemented a **visualization tool** which helps the users enjoy Higashi better. The visualization tool allows interactive navigation of the scHi-C analysis results and is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
+     
 To launch the visualization tool, first create a `visual_config.JSON` file under the `config_dir`. 
 The directory structure should be
 ```
