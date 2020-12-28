@@ -182,7 +182,7 @@ In progress
 --------------------
 
 ## One more thing (visualization of scHi-C & Higashi analysis)
-<img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo_vis.png" align="right"
+<img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo_vis2.png" align="right"
      alt="logo" width="290">
      
 In Higashi, we also implemented a **visualization tool** which helps the users enjoy Higashi better. The visualization tool allows interactive navigation of the scHi-C analysis results and is implemented based on [bokeh](https://docs.bokeh.org/en/latest/index.html).
