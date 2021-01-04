@@ -80,21 +80,13 @@ def get_neighbor(x, neighbor_mask):
 	return result
 
 def build_hash(data,compress,forward=True):
-	# neighbor_mask = np.zeros((9, 3), dtype='int')
-	count = 0
 	if forward:
 		func_ = pass_
 	else:
 		func_ = tqdm
-	# for i in [-1, 0, 1]:
-	# 	for j in [-1, 0, 1]:
-	# 		neighbor_mask[count, 1] += i
-	# 		neighbor_mask[count, 2] += j
-	# 		count += 1
-	# neighbor_mask = np.zeros((1,3), dtype='int')
 			
 	if compress:
-		dict1 = ScalableBloomFilter(error_rate=1e-4,initial_capacity=1000000)
+		dict1 = ScalableBloomFilter(error_rate=1e-4,initial_capacity=len(data) * 10)
 	else:
 		dict1 = set()
 
@@ -134,7 +126,8 @@ def build_hash3(data):
 def parallel_build_hash(data, func, num, initial = None, compress = False):
 	import multiprocessing
 	cpu_num = multiprocessing.cpu_count()
-	data = np.array_split(data, cpu_num * 3)
+	print ("dict building", data.shape)
+	# data = np.array_split(data, cpu_num*5)
 	dict1 = deepcopy(initial)
 	pool = ProcessPoolExecutor(max_workers=cpu_num)
 	process_list = []
@@ -146,19 +139,19 @@ def parallel_build_hash(data, func, num, initial = None, compress = False):
 	if func == 'build_hash3':
 		func = build_hash3
 
-	for datum in data[:-1]:
-		process_list.append(pool.submit(func, datum, compress))
-	process_list.append(pool.submit(func, data[-1], compress, False))
-
-	for p in as_completed(process_list):
-		a = p.result()
-		if compress:
-			dict1 = dict1.union(a)
-		else:
-			dict1.update(a)
-
-	pool.shutdown(wait=True)
-	
+	# for datum in data[:-1]:
+	# 	process_list.append(pool.submit(func, datum, compress, False))
+	# process_list.append(pool.submit(func, data, compress, False))
+	#
+	# for p in as_completed(process_list):
+	# 	a = p.result()
+	# 	if compress:
+	# 		dict1 = dict1.union(a)
+	# 	else:
+	# 		dict1.update(a)
+	#
+	# pool.shutdown(wait=True)
+	dict1 = build_hash(data, compress, False)
 
 	return dict1
 

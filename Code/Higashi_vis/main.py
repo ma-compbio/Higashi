@@ -537,7 +537,9 @@ def str_color_update(s):
 	if len(l) <= 10:
 		encoded_color = [Category10_10[xx] for xx in inv]
 	else:
-		encoded_color = [Category20_20[xx] for xx in inv]
+		Category20_20_temp = np.array(Category20_20)
+		Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
+		encoded_color = [Category20_20_temp[xx] for xx in inv]
 		
 	# s = list(s)
 	# source.patch({
@@ -637,10 +639,14 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	distance = pairwise_distances(v, metric='euclidean')
 	distance /= np.mean(distance)
 	if dim_reduction_selector.value == "PCA":
+		
 		v = PCA(n_components=3).fit_transform(v)
 		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
 	elif dim_reduction_selector.value == "UMAP":
-		model = UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+		if max(int(x_selector.value), int(y_selector.value)) < 3:
+			model = UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+		else:
+			model = UMAP(n_components=3, n_neighbors=15, min_dist=0.1)
 		if "UMAP_params" in config:
 			params = dict(config['UMAP_params'])
 			for key in params:
@@ -648,7 +654,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		print (v)
 		v = model.fit_transform(v)
 		print (v)
-		x, y = v[:, 0], v[:, 1]
+		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - UMAP finished" % timestr)
 		format_message()
@@ -892,7 +898,7 @@ cell_slider = Slider(title='cell selector', value=0, start=0, end=cell_num,step=
 
 
 r = embed_vis.scatter(x="x", y="y", size=size_selector.value, fill_color="color", line_color=None, legend_field="legend_info",
-					  alpha=0.6, source=source, nonselection_fill_alpha = 0.6, selection_fill_color="color", nonselection_fill_color="color")
+					  alpha=0.8, source=source, nonselection_fill_alpha = 0.8, selection_fill_color="color", nonselection_fill_color="color")
 embed_vis.add_tools(HoverTool(tooltips=[("index", "$index"), ("Label", "@legend_info")]))
 embed_vis.legend.location = "bottom_right"
 

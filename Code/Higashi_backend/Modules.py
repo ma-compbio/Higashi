@@ -288,9 +288,12 @@ class AutoEncoder(nn.Module):
 			self.dropout = None
 		
 		if layer_norm:
-			self.layer_norm = nn.LayerNorm(encoder_shape_list[-1])
+			self.layer_norm_stack = []
+			for i in range(len(encoder_shape_list) - 1):
+				self.layer_norm_stack.append(nn.LayerNorm(encoder_shape_list[i+1]).to(device))
+			
 		else:
-			self.layer_norm = None
+			self.layer_norm_stack = None
 	
 	
 	
@@ -304,8 +307,8 @@ class AutoEncoder(nn.Module):
 				if self.dropout is not None:
 					encoded_feats = self.dropout(encoded_feats)
 		
-		if self.layer_norm is not None:
-			encoded_feats = self.layer_norm(encoded_feats)
+			if self.layer_norm_stack is not None:
+				encoded_feats = self.layer_norm_stack[i](encoded_feats)
 		
 		if self.add_activation:
 			encoded_feats = activation_func(encoded_feats)
@@ -403,6 +406,68 @@ class AutoEncoder(nn.Module):
 		torch.cuda.empty_cache()
 		return encode.cpu().detach().numpy()
 
+
+class CNN(nn.Module):
+	def __init__(self, channel_num_list,
+	             dropout=None, input_length=1, bottle_neck=1, output_size=1):
+		super(CNN, self).__init__()
+		self.channel_num_list = channel_num_list
+		self.encoder_list = []
+		self.decoder_list = []
+		
+		for i in range(len(channel_num_list) - 1):
+			self.encoder_list.append(nn.Conv2d(channel_num_list[i], channel_num_list[i + 1], kernel_size=5, stride=3, dilation=1,
+			                                   padding_mode='zeros').to(device))
+		
+		test_input = torch.zeros([1, 1, input_length, input_length]).float().to(device)
+		for i in range(len(self.encoder_list)):
+			test_input = self.encoder_list[i](test_input)
+		size1 = test_input.view(-1).shape[0]
+		print("conv autoencoder bottleneck", test_input.shape)
+		self.encoder_list.append(nn.Linear(size1, bottle_neck))
+		self.decoder_list.append(nn.Linear(bottle_neck, output_size))
+		
+		self.encoder_list = nn.ModuleList(self.encoder_list)
+		self.decoder_list = nn.ModuleList(self.decoder_list)
+		
+		if dropout is not None:
+			self.dropout = nn.Dropout(dropout)
+		else:
+			self.dropout = dropout
+	
+	def encoder(self, input):
+		encoded_feats = input[:, None, :, :]
+		for i in range(len(self.encoder_list) - 1):
+			encoded_feats = self.encoder_list[i](encoded_feats)
+			encoded_feats = activation_func(encoded_feats)
+			if self.dropout is not None:
+				encoded_feats = self.dropout(encoded_feats)
+		encoded_feats = encoded_feats.view(len(encoded_feats), -1)
+		encoded_feats = self.encoder_list[-1](encoded_feats)
+		encoded_feats = activation_func(encoded_feats)
+		return encoded_feats
+	
+	def decoder(self, encoded_feats):
+		reconstructed_output = encoded_feats
+		reconstructed_output = self.decoder_list[0](reconstructed_output)
+		
+		return reconstructed_output
+	
+	def forward(self, input, return_recon=False):
+		encoded_feats = self.encoder(input)
+		if return_recon:
+			reconstructed_output = activation_func(encoded_feats)
+			
+			if self.dropout is not None:
+				reconstructed_output = self.dropout(reconstructed_output)
+			
+			reconstructed_output = self.decoder(reconstructed_output)
+			
+			return encoded_feats, reconstructed_output
+		else:
+			return encoded_feats
+
+
 # Multiple Embedding is a module that passes nodes to different branch of neural network to generate embeddings
 # The neural network to use would be dependent to the node ids (the input num_list parameters)
 # If the num_list is [0, 1000, 2000,...,]
@@ -462,9 +527,18 @@ class MultipleEmbedding(nn.Module):
 		self.layer_norm = nn.LayerNorm(self.dim).to(device)
 		
 		self.wstack = []
-		for i in range(len(self.embeddings)):
+		
+		i = 0
+		if self.input_size[i] == target_weights[i].shape[-1]:
+			self.wstack.append(
+				TiedAutoEncoder([self.input_size[i], self.dim], add_activation=True, tied_list=[]))
+		else:
+			self.wstack.append(AutoEncoder([self.input_size[i], self.dim], [self.dim, target_weights[i].shape[-1]],
+			                               add_activation=True))
+		
+		for i in range(1, len(self.embeddings)):
 			if self.input_size[i] == target_weights[i].shape[-1]:
-				self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[0]))
+				self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[]))
 			else:
 				self.wstack.append(AutoEncoder([self.input_size[i], self.dim],[self.dim, target_weights[i].shape[-1]],add_activation=True))
 		
@@ -590,22 +664,12 @@ class Hyper_SAGNN(nn.Module):
 		self.dropout = nn.Dropout(0.3)
 		if attribute_dict is not None:
 			self.attribute_dict = torch.from_numpy(attribute_dict).to(device)
-			self.extra_proba = FeedForward([self.attribute_dict.shape[-1] * 2, bottle_neck, 1])
+			self.extra_proba = FeedForward([self.attribute_dict.shape[-1] * 2 + cell_feats.shape[-1], bottle_neck, 1])
 			self.attribute_dict_embedding = nn.Embedding(len(self.attribute_dict), 1, padding_idx=0)
 			self.attribute_dict_embedding.weight = nn.Parameter(self.attribute_dict)
 			self.attribute_dict_embedding.weight.requires_grad = False
-		else:
-			self.attribute_dict = None
-			self.extra_proba = nn.Linear(1, 1)
-			self.final_proba = nn.Linear(17, 1)
-	
-	
-		if cell_feats is not None:
 			self.cell_feats = torch.from_numpy(cell_feats).to(device)
-			self.extra_nn = nn.Linear(1, 1)
-		else:
-			self.cell_feats = None
-			self.extra_nn = nn.Linear(1, 1)
+		self.only_distance = False
 	
 	def get_embedding(self, x, slf_attn_mask=None, non_pad_mask=None):
 		if slf_attn_mask is None:
@@ -622,40 +686,36 @@ class Hyper_SAGNN(nn.Module):
 		x = x.long()
 		sz_b, len_seq = x.shape
 		if self.attribute_dict is not None:
-			distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2])], dim=-1)
+			distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]), self.cell_feats[x[:, 0]]], dim=-1)
 			distance_proba = self.extra_proba(distance)
 		else:
 			distance_proba = torch.zeros((len(x), 1), dtype=torch.float, device=device)
 		
-		if self.cell_feats is not None:
-			cell_feats = self.cell_feats[x[:, 0]]
-		else:
-			cell_feats = torch.ones((len(x)), 1)
+		if not self.only_distance:
+			slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
+			non_pad_mask = get_non_pad_mask(x)
 			
-		cell_feats = self.extra_nn(cell_feats)
-		slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
-		non_pad_mask = get_non_pad_mask(x)
-		
-		dynamic, static, attn = self.get_embedding(x, slf_attn_mask, non_pad_mask)
-		dynamic = self.layer_norm1(dynamic)
-		static = self.layer_norm2(static)
-		
-		if self.diag_mask_flag:
-			output = (dynamic - static) ** 2
+			dynamic, static, attn = self.get_embedding(x, slf_attn_mask, non_pad_mask)
+			dynamic = self.layer_norm1(dynamic)
+			static = self.layer_norm2(static)
+			
+			if self.diag_mask_flag:
+				output = (dynamic - static) ** 2
+			else:
+				output = dynamic
+			
+			output = self.dropout(output)
+			output = self.pff_classifier(output)
+	
+			output = torch.sum(output * non_pad_mask, dim=-2, keepdim=False)
+			mask_sum = torch.sum(non_pad_mask, dim=-2, keepdim=False)
+			output /= mask_sum
+			
+			# print (cell_feats)
+			
+			output = output + distance_proba
 		else:
-			output = dynamic
-		
-		output = self.dropout(output)
-		output = self.pff_classifier(output)
-
-		output = torch.sum(output * non_pad_mask, dim=-2, keepdim=False)
-		mask_sum = torch.sum(non_pad_mask, dim=-2, keepdim=False)
-		output /= mask_sum
-		
-		# print (cell_feats)
-		
-		output = output + distance_proba + cell_feats
-		
+			return distance_proba
 		return output
 	
 	def predict(self, input, verbose=False, batch_size=96, activation=None):

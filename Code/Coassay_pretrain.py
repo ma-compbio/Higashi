@@ -6,7 +6,9 @@ import os
 from Higashi_backend.Modules import *
 from Higashi_backend.utils import *
 from sklearn.preprocessing import StandardScaler
-
+torch.backends.cudnn.benchmark = True
+from sklearn.decomposition import PCA
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 # One process for pretrain of the coassay 1D signal task
 
 def get_free_gpu():
@@ -23,13 +25,26 @@ def get_free_gpu():
 		return
 
 
+def XTanhLoss( y_t, y_prime_t):
+	ey_t = y_t - y_prime_t
+	return torch.mean(ey_t * torch.tanh(ey_t))
+
+
+
+def XSigmoidLoss(y_t, y_prime_t):
+	ey_t = y_t - y_prime_t
+	# return torch.mean(2 * ey_t / (1 + torch.exp(-ey_t)) - ey_t)
+	return torch.mean(2 * ey_t * torch.sigmoid(ey_t) - ey_t)
+	
+	
 def log_cosh(pred, truth, sample_weight=None):
+	# ey_t = truth - pred
+	# loss = torch.log(torch.clamp(torch.cosh(ey_t), 1.0, 100))
+	# if torch.sum(torch.isnan(loss))>0:
+	# 	print (chrom, pred[torch.isnan(loss)])
+	# return torch.mean(loss)
 	ey_t = truth - pred
-	if sample_weight is not None:
-		
-		return torch.mean(torch.log(torch.cosh(ey_t + 1e-12)) * sample_weight)
-	else:
-		return torch.mean(torch.log(torch.cosh(ey_t + 1e-12)))
+	return torch.mean(torch.log(torch.cosh(ey_t + 1e-12)))
 
 
 def forward_batch(model, batch_size=128):
@@ -37,7 +52,7 @@ def forward_batch(model, batch_size=128):
 	adj = hic[train_cell_ids[batch]]
 	targets = cell_attributes[train_cell_ids[batch]]
 	embed, recon = model(adj, return_recon=True)
-	mse_loss = log_cosh(recon, targets)
+	mse_loss = XSigmoidLoss(recon, targets)
 	return mse_loss, embed
 
 
@@ -52,9 +67,18 @@ if __name__ == '__main__':
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	
 	hic = np.array(np.load(os.path.join(temp_dir, "%s_cell_feats.npy" % chrom), allow_pickle=True))
-	dim = int(math.sqrt(hic.shape[-1]) * 2)
+	square_size = int(math.sqrt(hic.shape[-1]))
+	dim = square_size * 2
+	# hic = StandardScaler().fit_transform(hic)
+	
+	hic[np.isnan(hic)] = 0.0
+	if hic.shape[-1] > hic.shape[0] * 3:
+		hic = PCA(n_components = int(np.min(hic.shape)-1)).fit_transform(hic)
 	hic = StandardScaler().fit_transform(hic)
+	# hic = hic.reshape((len(hic), square_size, square_size))
+	
 	hic = torch.from_numpy(hic).to(device).float()
+
 	coassay = np.load(os.path.join(temp_dir, "coassay_%s.npy" % chrom), allow_pickle=True)
 	
 	print("chrom", chrom, hic.shape, coassay.shape)
@@ -62,20 +86,45 @@ if __name__ == '__main__':
 	cell_ids = torch.arange(len(hic)).long().to(device)
 	train_cell_ids = torch.randperm(len(cell_ids)).long().to(device)
 	
-	model = AutoEncoder([hic.shape[-1], dim * 4, dim * 2, dim], [dim, cell_attributes.shape[-1]],
-	                    add_activation=True)
-	optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+	model = AutoEncoder([hic.shape[-1], dim * 4,  dim * 2, dim], [dim, cell_attributes.shape[-1]],
+						add_activation=True, layer_norm=True).to(device)
 	
+	for name, param in model.named_parameters():
+		print(name, param.requires_grad, param.shape)
+	
+	optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+	# scheduler = ReduceLROnPlateau(optimizer, 'min')
+	loss_prev = None
+	no_improv_count = 0
+	bar = trange(50000, desc=' - (Training) ', leave=False, )
 	for i in range(50000):
 		loss, embed = forward_batch(model, len(hic))
+		if loss_prev is None:
+			loss_prev = loss.item()
+		else:
+			if loss.item() <= loss_prev-0.001:
+				loss_prev = loss.item()
+				no_improv_count = 0
+			else:
+				no_improv_count += 1
+		# if (no_improv_count >= 30000):
+		# 	break
 		optimizer.zero_grad()
 		loss.backward()
-		optimizer.step()
+		# torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 		
-		if i % 1000 == 0:
-			print("Pre-training co-assay", chrom, i, loss.item())
+		optimizer.step()
+		# scheduler.step(loss)
+		
+		bar.update(n=1)
+		# if i % 1000 == 0:
+		bar.set_description("Pre-training co-assay %s, Loss:%.4f, best Loss:%.4f" %
+							(chrom,  loss.item(), loss_prev),
+							refresh=True)
 			
+	torch.cuda.empty_cache()
 	print(chrom, "finish", loss.item())
 	adj = hic[cell_ids]
-	embed = model(adj, return_recon=False)
+	embed, recon_ = model(adj, return_recon=True)
 	np.save(os.path.join(temp_dir, "pretrain_coassay_%s.npy" % chrom), embed.detach().cpu().numpy())
+	np.save(os.path.join(temp_dir, "pretrain_coassay_recon_%s.npy" % chrom), recon_.detach().cpu().numpy())

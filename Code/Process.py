@@ -3,7 +3,7 @@ import os
 import pandas as pd
 from Higashi_backend.utils import *
 from Higashi_backend.Modules import *
-
+from Higashi_analysis.Higashi_analysis import *
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm, trange
@@ -15,7 +15,8 @@ import pickle
 from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, KBinsDiscretizer
 import subprocess
-
+from umap import UMAP
+from scipy.sparse.linalg import svds
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device_ids = [0, 1]
 
@@ -125,13 +126,20 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			m[loc[0], loc[1]] += w
 		
 		m = m + m.T
-		
-		
+		# print (m)
+		# row_sum = np.sum(m, axis=-1)
+		# m[row_sum == 0, row_sum == 0] = 1.0
+		# np.fill_diagonal(m, 1.0)
+		# print (m)
+		# np.fill_diagonal(m, 0.0)
+		# print (m)
+		m = m / (np.sum(m) + 1e-15)
+		# print (m)
 		cell_adj.append(m.reshape((-1)))
 	
 	cell_adj = np.stack(cell_adj, axis=0)
 	cell_adj = csr_matrix(cell_adj)
-	print (cell_adj)
+	# print (cell_adj)
 	bin_adj /= cell_num
 	
 	np.save(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
@@ -168,10 +176,16 @@ def create_matrix():
 	cell_feats = []
 	for cell in trange(cell_num):
 		mask = data[:, 0] == cell
-		temp_weight = weight[mask]
+		temp, temp_weight = data[mask], weight[mask]
+		count_cell = []
 		
-		all_ = np.sum(temp_weight)
-		cell_feats.append([all_])
+		for c in range(len(chrom_list)):
+			mask = temp[:, 1] == c
+			count_cell.append(np.sum(temp_weight[mask]))
+		
+		
+		# all_ = np.sum(temp_weight)
+		cell_feats.append(count_cell)
 	cell_feats = np.log10(np.array(cell_feats))
 	cell_feats = StandardScaler().fit_transform(cell_feats)
 	np.save(os.path.join(temp_dir, "cell_feats.npy"), cell_feats)
@@ -247,7 +261,7 @@ def random_walk_gpu(A, rp, epochs=60):
 def impute_gpu(A):
 	pad = 1
 	rp = 0.5
-	A = np.log2(A + 1)
+	# A = np.log2(A + 1)
 	conv_A = neighbor_ave_gpu(A, pad)
 	if rp == -1:
 		Q2 = conv_A[:]
@@ -285,6 +299,7 @@ def conv_only(A):
 # Run schicluster for comparisons
 def impute_all():
 	get_free_gpu()
+	# schicluster_list = []
 	print("start conv random walk (scHiCluster) as baseline")
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
@@ -304,14 +319,20 @@ def impute_all():
 			
 		# Minus one because the generate_binpair function would add one in the function
 		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
+		# rw_list = []
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % c), "w") as f:
 			f.create_dataset('coordinates', data = samples)
 			for i, m in enumerate(tqdm(a)):
 				m = impute_gpu(np.array(m.todense()))
+				# rw_list.append(m)
 				v = m[samples[:, 0], samples[:, 1]]
 				
 				f.create_dataset("cell_%d" % (i), data=v)
+	
+		# schicluster_list.append(np.array(rw_list))
 
+	
+	
 # Optional imputation for similar sparsity
 def optional_impute_for_cell_adj():
 	print ("optional impute")
@@ -322,26 +343,24 @@ def optional_impute_for_cell_adj():
 		
 		impute_list = []
 		sparsity = np.sum(a > 0 ,axis=-1) / a.shape[-1]
-		upsampling2 = np.median(sparsity)
+		upsampling2 = min(np.median(sparsity) * 2, 0.3)
 		
 		
 		for i, m in enumerate(tqdm(a)):
 			b = m.reshape((int(np.sqrt(len(m))), -1))
-			b = np.log(b+1)
 			sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
 			while sparsity < min(upsampling2 * 1.5, 1.0):
 				# print ("sparsity", sparsity)
 				b = conv_only(b)
 				sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
-			b = np.exp(b) - 1
 			impute_list.append(b.reshape((-1)))
 			
 		impute_list = np.stack(impute_list, axis=0)
-		print(impute_list.shape)
+		# print(impute_list.shape)
 		thres = np.percentile(impute_list, 100 * (1 - upsampling2), axis=1)
-		print(thres)
+		# print(thres)
 		impute_list = (impute_list > thres[:, None]).astype('float32') * impute_list
-		print(impute_list)
+		# print(impute_list)
 		impute_list = csr_matrix(impute_list)
 		sparsity = np.sum(impute_list > 0, axis=-1) / impute_list.shape[-1]
 		print("sparsity", sparsity, np.median(sparsity), np.min(sparsity), np.max(sparsity))
@@ -366,7 +385,7 @@ def quantileNormalize(temp):
 
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
-	print (np.sum(temp1 > 0, axis=0))
+	# print (np.sum(temp1 > 0, axis=0))
 	mask = np.array(np.sum(temp1 > 0, axis=0) > 0)
 	mask = mask.reshape((-1))
 	if type(temp) != np.ndarray:
@@ -374,18 +393,24 @@ def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	size = int(total_embed_size / total_chrom_size * temp.shape[-1]) + 1
 	temp = temp[:, mask]
 	sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
-	print ("sparsity", sparsity, np.median(sparsity), np.min(sparsity), np.max(sparsity))
+	print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
 	
-	temp /= (np.sum(temp, axis=-1, keepdims=True) + 1e-15)
+	# temp /= (np.sum(temp, axis=-1, keepdims=True) + 1e-15)
 	if "optional_quantile" in config:
 		if config['optional_quantile']:
+			print ("quantile noramlizing", c)
 			temp1 = quantileNormalize(temp)
 			temp1[temp == 0]  = 0
 			temp = temp1
 	np.save(os.path.join(temp_dir, "%s_cell_feats.npy" % c), temp)
-
+	print (c, temp)
 	temp1 = PCA(n_components=size).fit_transform(temp).astype('float32')
+	# temp1 = csr_matrix(temp1)
+	# temp1 = StandardScaler().fit_transform(temp1)
+	
+	# temp1, _, _ = svds(temp1, k=size)
 	print (temp.shape, temp1.shape)
+	# print(c, np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c)), temp1)
 	np.save(os.path.join(temp_dir, "%s_cell_PCA.npy" % c), temp1)
 
 # generate feats for cell and bin nodes
@@ -422,7 +447,10 @@ def generate_feats(smooth_flag=False):
 def process_signal_one(chrom):
 	cmd = ["python", "Coassay_pretrain.py", args.config, chrom]
 	subprocess.call(cmd)
-	
+
+def generate_umap(vec):
+	return UMAP(n_components=2, n_neighbors=30, min_dist=0.3).fit_transform(vec)
+
 def process_signal():
 	print ("co-assay mode")
 	signal_file = h5py.File(os.path.join(data_dir, "sc_signal.hdf5"), "r")
@@ -432,39 +460,68 @@ def process_signal():
 		one_signal_stack = []
 		signal_file_one = signal_file[signal]
 		
-		cells = np.arange(len(signal_file_one.keys()))
+		cells = np.arange(len(signal_file_one.keys()) - 1)
 		for cell in cells:
 			one_signal_stack.append(np.array(signal_file_one[str(cell)]))
-		one_signal_stack = np.stack(one_signal_stack, axis=0).astype('float32')
+		one_signal_stack = np.stack(one_signal_stack, axis=0)
 		one_signal_stack = StandardScaler().fit_transform(one_signal_stack.reshape((-1, 1))).reshape(
 			(len(one_signal_stack), -1))
+		one_signal_stack[np.isnan(one_signal_stack)] = 0.0
 		
 		chrom_list_signal = np.array(signal_file[signal]["bin"]["chrom"])
 		for chrom in chrom_list:
 			chrom2signals[chrom].append(one_signal_stack[:, chrom_list_signal == chrom])
 	
+	signal_all = []
+	
 	for chrom in chrom_list:
 		temp = chrom2signals[chrom]
 		temp = np.concatenate(temp, axis=-1)
 		np.save(os.path.join(temp_dir, "coassay_%s.npy" % chrom), temp)
+		signal_all.append(temp)
+	signal_all = np.concatenate(signal_all, axis=-1)
+	signal_all = PCA(n_components=int(np.min(signal_all.shape) * 0.8)).fit_transform(signal_all)
+	np.save(os.path.join(temp_dir, "coassay_all.npy"), signal_all)
 	
 	
 	
+
+	# pool = ProcessPoolExecutor(max_workers=int(gpu_num * 1.2))
+	# for chrom in chrom_list:
+	# 	pool.submit(process_signal_one, chrom)
+	# 	time.sleep(3)
+	# pool.shutdown(wait=True)
 	
-	
-	pool = ProcessPoolExecutor(max_workers=int(gpu_num * 2))
-	for chrom in chrom_list:
-		pool.submit(process_signal_one, chrom)
-		time.sleep(3)
-	
-	pool.shutdown(wait=True)
+
 	
 	attributes_list = []
 	for chrom in chrom_list:
 		temp = np.load(os.path.join(temp_dir, "pretrain_coassay_%s.npy" % chrom))
 		attributes_list.append(temp)
-	attributes_list = np.concatenate(attributes_list)
+		
+		
+		
+	attributes_list = np.concatenate(attributes_list, axis=-1)
+	attributes_list = StandardScaler().fit_transform(attributes_list)
+	
+
 	np.save(os.path.join(temp_dir, "pretrain_coassay.npy"), attributes_list)
+
+def schicluster(chrom_matrix_list, dim, prct=20):
+	matrix = []
+	for chrom in chrom_matrix_list:
+		chrom = chrom.reshape(len(chrom), -1)
+		thres = np.percentile(chrom, 100 - prct, axis=1)
+		chrom_bin = (chrom > thres[:, None]).astype('float32')
+		ndim = int(min(chrom_bin.shape) * 0.2) - 1
+		pca = PCA(n_components=ndim)
+		R_reduce = pca.fit_transform(chrom_bin)
+		matrix.append(R_reduce)
+	matrix = np.concatenate(matrix, axis=1)
+	pca = PCA(n_components=dim)
+	matrix_reduce = pca.fit_transform(matrix)
+	return matrix_reduce
+	
 	
 args = parse_args()
 
@@ -520,11 +577,13 @@ else:
 	min_bin = int(min_distance / res)
 print ("min bin", min_bin)
 
+
+generate_chrom_start_end()
+extract_table()
+create_matrix()
 #
-# generate_chrom_start_end()
-# extract_table()
-# create_matrix()
-# impute_all()
+
+
 optional_smooth_flag = False
 if "optional_smooth" in config:
 	if config['optional_smooth']:
@@ -533,6 +592,8 @@ if "optional_smooth" in config:
 generate_feats(optional_smooth_flag)
 
 
+
 if "coassay" in config:
 	if config["coassay"]:
 		process_signal()
+impute_all()
