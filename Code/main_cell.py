@@ -49,7 +49,7 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 		adj = node_embedding_init.embeddings[0](cell_ids)
 		targets = node_embedding_init.targets[0](cell_ids)
 		_, recon = node_embedding_init.wstack[0](adj, return_recon=True)
-		mse_loss = F.mse_loss(recon, targets, reduction="sum") / len(adj) / adj.shape[-1] * 800
+		mse_loss = F.mse_loss(recon, targets, reduction="mean") #/ len(adj) / adj.shape[-1] * 800
 	else:
 		mse_loss = torch.as_tensor([0], dtype=torch.float).to(device)
 		
@@ -467,6 +467,7 @@ def generate_attributes():
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
+		a = StandardScaler().fit_transform(a)
 		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
 	pca_after = np.concatenate(pca_after, axis=-1).astype('float32')
@@ -474,7 +475,11 @@ def generate_attributes():
 	
 	
 	if coassay:
+		print ("coassay")
 		cell_attributes = np.load(os.path.join(temp_dir, "pretrain_coassay.npy")).astype('float32')
+		# cell_targets = np.load(os.path.join(temp_dir, "coassay_all.npy")).astype('float32')
+		# cell_targets = StandardScaler().fit_transform(cell_targets)
+		# cell_attributes = StandardScaler().fit_transform(cell_attributes)
 		targets.append(cell_attributes)
 		embeddings.append(cell_attributes)
 	else:
@@ -513,23 +518,25 @@ def generate_attributes():
 	return embeddings, attribute_dict, targets
 
 
-def reduce_duplicate_normalize_dict(list_of_nb, num=10):
-	nb_list = []
-	for nb in tqdm(list_of_nb):
+def reduce_duplicate_normalize_dict(list_of_nb, num=10, identifier=0):
+	print (len(list_of_nb), identifier)
+	for i, nb in enumerate(tqdm(list_of_nb)):
 		if len(nb) == 0:
-			nb_list.append(np.zeros((0, 2)))
+			list_of_nb[i] = np.zeros((0, 2))
 		else:
-			nb = np.array([[k,nb[k]] for k in nb ])
-			
-			if len(nb) < num or num < 0:
-				nb_list.append(nb)
+			new_v = np.array([[k,nb[k]] for k in nb ])
+			# new_v = np.stack([np.array(nb.keys()), np.array(nb.values())], axis=-1)
+			# print (new_v.shape)
+			del nb
+			if len(new_v) < num or num < 0:
+				list_of_nb[i] = new_v
 			else:
-				cut_off = np.sort(nb[:, 1])[::-1]
+				cut_off = np.sort(new_v[:, 1])[::-1]
 				cut_off = cut_off[num - 1]
-				mask = nb[:, 1] >= cut_off
-				nb_list.append(nb[mask, :])
+				mask = new_v[:, 1] >= cut_off
+				list_of_nb[i] = new_v[mask, :]
 	
-	return np.array(nb_list)
+	return np.array(list_of_nb), identifier
 
 
 def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_weight_list, samp_num=10):
@@ -547,21 +554,25 @@ def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_w
 			cell_neighbor_list_inverse[c].append(i)
 	
 	size = (cell_num + 1) * (int(num_list[-1]) + 1)
-	neighbor_list = [Counter() for i in range(size)]
+	neighbor_list = [[] for i in trange(size)]
 	bulk_neighbor_list = []
 	
-
+	print ("start fill in dict")
 	for datum, w in tqdm(zip(data, weight), total=len(data)):
 		for c in cell_neighbor_list_inverse[datum[0] + 1]:
 			balance_weight = weight_dict[(c, datum[0] + 1)]
+			if type(neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1]) is list:
+				neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1] = Counter()
+			if type(neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1]) is list:
+				neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1] = Counter()
 			neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1][datum[2] + 1] += w * balance_weight
 			neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1][datum[1] + 1] +=  w * balance_weight
 
+	print ("finish fill in")
+	neighbor_list, _ = reduce_duplicate_normalize_dict(neighbor_list, samp_num, 0)
 	
-	neighbor_list = reduce_duplicate_normalize_dict(neighbor_list, samp_num)
-	
-	print(neighbor_list)
-	
+	# print(neighbor_list)
+	# neighbor_list = np.concatenate(result_all, axis=0)
 	return neighbor_list, bulk_neighbor_list
 
 # neighbor_list = [Counter() for i in range(size)]
@@ -705,7 +716,7 @@ if __name__ == '__main__':
 	# mask = weight >= 2
 	# data = data[mask]
 	# weight = weight[mask]
-	# print(data.shape)
+	print(data.shape)
 	index = np.arange(len(data))
 	np.random.shuffle(index)
 	train_index = index[:int(0.85 * len(index))]
@@ -786,9 +797,9 @@ if __name__ == '__main__':
 		cell_feats = np.concatenate([np.zeros((1, cell_feats.shape[-1])), cell_feats], axis=0).astype('float32')
 	except:
 		cell_feats = None
-	print ("cell_feats", cell_feats)
+	# print ("cell_feats", cell_feats)
 	embeddings_initial, attribute_dict, targets_initial = generate_attributes()
-	
+	print ("attribute_dict.shape", attribute_dict.shape, cell_feats.shape)
 	# Add 1 for the padding index
 	print("adding pad idx")
 	train_data = add_padding_idx(train_data)
@@ -854,7 +865,7 @@ if __name__ == '__main__':
 	params = sum([np.prod(p.size()) for p in model_parameters])
 	print("params to be trained", params)
 	alpha = 1.0
-	beta = 1e-2
+	beta = 0.0 if not coassay else 1e-1
 	dynamic_pair_ratio = True
 	use_recon = True
 	pair_ratio = 0.0
@@ -864,7 +875,16 @@ if __name__ == '__main__':
 	
 	# First round, no cell dependent GNN
 	if training_stage <= 1:
+		higashi_model.only_distance=True
+		train(higashi_model,
+		      loss=loss,
+		      training_data=(train_data, train_weight),
+		      validation_data=(test_data, test_weight),
+		      optimizer=[optimizer], epochs=20, batch_size=batch_size,
+		      load_first=False, save_embed=True)
+		pair_ratio = 0.0
 		# Training Stage 1
+		higashi_model.only_distance = False
 		train(higashi_model,
 		      loss=loss,
 		      training_data=(train_data, train_weight),
@@ -877,33 +897,39 @@ if __name__ == '__main__':
 
 		torch.save(checkpoint, save_path+"_stage1")
 
-	
+
 	# Loading Stage 1
 	checkpoint = torch.load(save_path+"_stage1", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
 	node_embedding_init.off_hook([0])
-	
+
 	# if training_stage <= 1:
 	# 	# Impute Stage 1
 	# 	torch.save(higashi_model, save_path+"_stage1_model")
 	# 	# impute_pool.submit(mp_impute, args.config, save_path+"_stage1_model", embedding_name + "_all", mode)
-	
+
 	original_data = np.load(os.path.join(temp_dir, "filter_data.npy")).astype('int')
 	original_weight = np.load(os.path.join(temp_dir, "filter_weight.npy")).astype('float32')
 	mask = ((original_data[:, 2] - original_data[:, 1]) < max_bin) & ((original_data[:, 2] - original_data[:, 1]) >= min_bin)
 	original_data = original_data[mask]
 	original_weight = original_weight[mask]
+
+	# mask = original_weight >= 2
+	# original_data = original_data[mask]
+	# original_weight = original_weight[mask]
+
+
 	original_weight = np.log10(original_weight+1)
 	print ("GCN weight", original_weight, np.min(original_weight), np.max(original_weight))
 	neighbor_list, bulk_neighbor_list = get_bin_neighbor_list_dict(original_data, original_weight,
 		                                                               cell_neighbor_list, cell_neighbor_weight_list, 32)
-	
+
 	alpha = 1.0
 	beta = 1e-2
 	dynamic_pair_ratio = False
 	use_recon = False
 	pair_ratio = 0.6
-	
+
 	remove_flag = True
 	node_embedding2 = GraphSageEncoder_with_weights(features=node_embedding_init, linear_features=node_embedding_init,
 	                                                feature_dim=dimensions,
@@ -912,11 +938,11 @@ if __name__ == '__main__':
 	                                                transfer_range=local_transfer_range, start_end_dict=start_end_dict,
 	                                                pass_pseudo_id=False, remove=remove_flag,
 	                                                pass_remove=False).to(device)
-	
+
 	higashi_model.encode1.dynamic_nn = node_embedding2
 	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
-	
-	# Second round, with cell dependent GNN, but no neighbors
+
+	# # Second round, with cell dependent GNN, but no neighbors
 	if training_stage <= 2:
 		# Training Stage 2
 		train(higashi_model,
@@ -927,8 +953,12 @@ if __name__ == '__main__':
 		      load_first=False, save_embed=False)
 		checkpoint = {
 				'model_link': higashi_model.state_dict()}
-	
+
 		torch.save(checkpoint, save_path + "_stage2")
+	
+	# Loading Stage 2
+	checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
+	higashi_model.load_state_dict(checkpoint['model_link'])
 	
 	if training_stage <= 2:
 		# Impute Stage 2
@@ -937,19 +967,17 @@ if __name__ == '__main__':
 		else:
 			torch.save(higashi_model, save_path + "_stage2_model")
 			impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute" %(embedding_name, 1), mode)
-	
-	
-	# Loading Stage 2
-	checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
-	higashi_model.load_state_dict(checkpoint['model_link'])
-	
+
+
+
+
 	validation_data_generator = DataGenerator(test_data, test_weight, int(batch_size / (neg_num + 1)),
 	                                                False, num_list)
 	train_bce_loss, _, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 	valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
-	
+
 	print ("train_loss", train_bce_loss, "test_loss", valid_bce_loss)
-	
+
 	# If the gap between train and valid loss is small, we can include the cell itself in the nbr_list
 	# If the gap is large, it indicates an overfitting problem. We would just use the neiboring cells to approximate
 	nbr_mode = 0 if (train_bce_loss - valid_bce_loss) < 0.1 or valid_bce_loss > 0.1 else 1
@@ -963,7 +991,7 @@ if __name__ == '__main__':
 	del neighbor_list, bulk_neighbor_list
 	neighbor_list, bulk_neighbor_list = get_bin_neighbor_list_dict(original_data, original_weight, cell_neighbor_list,
 	                                                               cell_neighbor_weight_list, 32)
-	
+
 	node_embedding2.node2nbr = neighbor_list
 	# node_embedding2.off_hook()
 	# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,
@@ -975,32 +1003,32 @@ if __name__ == '__main__':
 	#                                                 pass_remove=False).to(device)
 	#
 	# higashi_model.encode1.dynamic_nn = node_embedding1
-	
+
 	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
-	
+
 	if training_stage <= 3:
 		train(higashi_model,
 		      loss=loss,
 		      training_data=(train_data, train_weight),
 		      validation_data=(test_data, test_weight),
 		      optimizer=[optimizer], epochs=45, batch_size=batch_size, load_first=False)
-	
+
 		checkpoint = {
 			'model_link': higashi_model.state_dict()}
-	
+
 		torch.save(checkpoint, save_path+"_stage3")
-	
+
 	# Loading Stage 3
 	checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
-	
+
 	train(higashi_model,
 	      loss=loss,
 	      training_data=(train_data, train_weight),
 	      validation_data=(test_data, test_weight),
 	      optimizer=[optimizer], epochs=0, batch_size=batch_size,
 	      load_first=False, save_embed=True)
-	
+
 	# Impute Stage 3
 	impute_process(args.config, higashi_model, "%s_nbr_%d_impute" %(embedding_name, neighbor_num), mode)
 	impute_pool.shutdown(wait=True)
