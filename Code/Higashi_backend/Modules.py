@@ -5,12 +5,13 @@ from Higashi_backend.Functions import *
 import multiprocessing
 import time
 from torch.nn.utils.rnn import pad_sequence
+from sklearn.decomposition import PCA
 cpu_num = multiprocessing.cpu_count()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device_ids = [0, 1]
 
 activation_func = swish
-# activation_func = torch.tanh
+
 
 class Wrap_Embedding(torch.nn.Embedding):
 	def __init__(self, *args, **kwargs):
@@ -51,10 +52,10 @@ class SparseEmbedding(nn.Module):
 			elif type(embedding_weight) is np.ndarray:
 				try:
 					self.embedding = torch.from_numpy(
-						np.asarray(embedding_weight.todense())).to(self_device)
+						np.array(embedding_weight.todense())).to(self_device)
 				except BaseException:
 					self.embedding = torch.from_numpy(
-						np.asarray(embedding_weight)).to(self_device)
+						np.array(embedding_weight)).to(self_device)
 			else:
 				print("Sparse Embedding Error", type(embedding_weight))
 				self.sparse = True
@@ -65,7 +66,7 @@ class SparseEmbedding(nn.Module):
 		if self.sparse:
 			x = x.cpu().numpy()
 			x = x.reshape((-1))
-			temp = np.asarray((self.embedding[x, :]).todense())
+			temp = np.array((self.embedding[x, :]).todense())
 			return torch.from_numpy(temp).to(device)
 		if self.cpu:
 			temp = self.embedding[x.cpu(), :]
@@ -92,7 +93,7 @@ class TiedAutoEncoder(nn.Module):
 		self.bias_list = []
 		self.use_bias = use_bias
 		self.recon_bias_list = []
-		
+		self.shape_list = shape_list
 		# Generating weights for the tied autoencoder
 		for i in range(len(shape_list) - 1):
 			p = nn.parameter.Parameter(torch.ones([int(shape_list[i + 1]),
@@ -147,6 +148,21 @@ class TiedAutoEncoder(nn.Module):
 			bound = 1 / math.sqrt(fan_out)
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
 	
+	def untie(self):
+		# print ("untie")
+		new_reverse_weight_list = []
+		
+		for w in self.reverse_weight_list:
+			new_reverse_weight_list.append(nn.parameter.Parameter(torch.ones_like(w).to(device)))
+		for i in range(len(new_reverse_weight_list)):
+			nn.init.kaiming_uniform_(new_reverse_weight_list[i], a=0.0, mode='fan_out', nonlinearity='leaky_relu')
+		self.reverse_weight_list = nn.ParameterList(new_reverse_weight_list)
+		
+		for i, b in enumerate(self.recon_bias_list):
+			fan_in, fan_out = torch.nn.init._calculate_fan_in_and_fan_out(self.reverse_weight_list[i])
+			bound = 1 / math.sqrt(fan_out)
+			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
+			
 	def encoder(self, input):
 		encoded_feats = input
 		for i in range(len(self.weight_list)):
@@ -206,9 +222,14 @@ class TiedAutoEncoder(nn.Module):
 	        epochs=10, sparse=True, sparse_rate=None, classifier=False, early_stop=True, batch_size=-1, targets=None):
 		for name, param in self.named_parameters():
 			print(name, param.requires_grad, param.shape)
-			
+		pca = PCA(n_components=self.shape_list[1]).fit(data)
 		optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
 		data = torch.from_numpy(data).to(device)
+		
+		
+		self.weight_list[0].data = torch.from_numpy(pca.components_).float().to(device)
+		self.reverse_weight_list[-1].data = torch.from_numpy(pca.components_).float().to(device)
+		
 		
 		if batch_size < 0:
 			batch_size = int(len(data))
@@ -225,7 +246,7 @@ class TiedAutoEncoder(nn.Module):
 			elif classifier:
 				loss = F.binary_cross_entropy_with_logits(recon, (data[batch_index] > 0).float())
 			else:
-				loss = F.mse_loss(recon, data[batch_index], reduction="sum") / len(batch_index)
+				loss = F.mse_loss(recon, data[batch_index])
 			
 			if i == 0:
 				loss_best = float(loss.item())
@@ -407,67 +428,6 @@ class AutoEncoder(nn.Module):
 		return encode.cpu().detach().numpy()
 
 
-class CNN(nn.Module):
-	def __init__(self, channel_num_list,
-	             dropout=None, input_length=1, bottle_neck=1, output_size=1):
-		super(CNN, self).__init__()
-		self.channel_num_list = channel_num_list
-		self.encoder_list = []
-		self.decoder_list = []
-		
-		for i in range(len(channel_num_list) - 1):
-			self.encoder_list.append(nn.Conv2d(channel_num_list[i], channel_num_list[i + 1], kernel_size=5, stride=3, dilation=1,
-			                                   padding_mode='zeros').to(device))
-		
-		test_input = torch.zeros([1, 1, input_length, input_length]).float().to(device)
-		for i in range(len(self.encoder_list)):
-			test_input = self.encoder_list[i](test_input)
-		size1 = test_input.view(-1).shape[0]
-		print("conv autoencoder bottleneck", test_input.shape)
-		self.encoder_list.append(nn.Linear(size1, bottle_neck))
-		self.decoder_list.append(nn.Linear(bottle_neck, output_size))
-		
-		self.encoder_list = nn.ModuleList(self.encoder_list)
-		self.decoder_list = nn.ModuleList(self.decoder_list)
-		
-		if dropout is not None:
-			self.dropout = nn.Dropout(dropout)
-		else:
-			self.dropout = dropout
-	
-	def encoder(self, input):
-		encoded_feats = input[:, None, :, :]
-		for i in range(len(self.encoder_list) - 1):
-			encoded_feats = self.encoder_list[i](encoded_feats)
-			encoded_feats = activation_func(encoded_feats)
-			if self.dropout is not None:
-				encoded_feats = self.dropout(encoded_feats)
-		encoded_feats = encoded_feats.view(len(encoded_feats), -1)
-		encoded_feats = self.encoder_list[-1](encoded_feats)
-		encoded_feats = activation_func(encoded_feats)
-		return encoded_feats
-	
-	def decoder(self, encoded_feats):
-		reconstructed_output = encoded_feats
-		reconstructed_output = self.decoder_list[0](reconstructed_output)
-		
-		return reconstructed_output
-	
-	def forward(self, input, return_recon=False):
-		encoded_feats = self.encoder(input)
-		if return_recon:
-			reconstructed_output = activation_func(encoded_feats)
-			
-			if self.dropout is not None:
-				reconstructed_output = self.dropout(reconstructed_output)
-			
-			reconstructed_output = self.decoder(reconstructed_output)
-			
-			return encoded_feats, reconstructed_output
-		else:
-			return encoded_feats
-
-
 # Multiple Embedding is a module that passes nodes to different branch of neural network to generate embeddings
 # The neural network to use would be dependent to the node ids (the input num_list parameters)
 # If the num_list is [0, 1000, 2000,...,]
@@ -531,7 +491,7 @@ class MultipleEmbedding(nn.Module):
 		i = 0
 		if self.input_size[i] == target_weights[i].shape[-1]:
 			self.wstack.append(
-				TiedAutoEncoder([self.input_size[i], self.dim], add_activation=True, tied_list=[]))
+				TiedAutoEncoder([self.input_size[i], self.dim], add_activation=False, tied_list=[]))
 		else:
 			self.wstack.append(AutoEncoder([self.input_size[i], self.dim], [self.dim, target_weights[i].shape[-1]],
 			                               add_activation=True))
@@ -598,8 +558,10 @@ class MultipleEmbedding(nn.Module):
 			ids = torch.arange(start=0, end=self.num_list[index + 1] - self.num_list[index], device=device)
 			embed = self.on_hook_embedding[index](ids)
 			self.off_hook_embedding[index] = SparseEmbedding(embed, False)
-			self.on_hook_set.remove(index)
-
+			try:
+				self.on_hook_set.remove(index)
+			except:
+				pass
 	
 	def on_hook(self, on_hook_list):
 		if len(on_hook_list) == 0:
@@ -631,7 +593,6 @@ class Hyper_SAGNN(nn.Module):
 			d_model,
 			d_k,
 			d_v,
-			node_embedding,
 			diag_mask,
 			bottle_neck,
 			attribute_dict=None,
@@ -643,7 +604,6 @@ class Hyper_SAGNN(nn.Module):
 		self.pff_classifier = PositionwiseFeedForward(
 			[d_model, 1])
 		
-		self.node_embedding = node_embedding
 		
 		self.encode1 = EncoderLayer(
 			n_head,
@@ -664,25 +624,26 @@ class Hyper_SAGNN(nn.Module):
 		self.dropout = nn.Dropout(0.3)
 		if attribute_dict is not None:
 			self.attribute_dict = torch.from_numpy(attribute_dict).to(device)
-			self.extra_proba = FeedForward([self.attribute_dict.shape[-1] * 2 + cell_feats.shape[-1], bottle_neck, 1])
+			input_size = self.attribute_dict.shape[-1] * 2 + cell_feats.shape[-1]
+			self.extra_proba = FeedForward([input_size,int(input_size/2)+1 , int(input_size/4)+1,  1])
 			self.attribute_dict_embedding = nn.Embedding(len(self.attribute_dict), 1, padding_idx=0)
 			self.attribute_dict_embedding.weight = nn.Parameter(self.attribute_dict)
 			self.attribute_dict_embedding.weight.requires_grad = False
 			self.cell_feats = torch.from_numpy(cell_feats).to(device)
 		self.only_distance = False
 	
-	def get_embedding(self, x, slf_attn_mask=None, non_pad_mask=None):
+	def get_embedding(self, x, x_chrom, slf_attn_mask=None, non_pad_mask=None):
 		if slf_attn_mask is None:
 			slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
 			non_pad_mask = get_non_pad_mask(x)
 			
-		dynamic, static, attn = self.encode1(x, x, slf_attn_mask, non_pad_mask)
+		dynamic, static, attn = self.encode1(x, x, x_chrom, slf_attn_mask, non_pad_mask)
 		if torch.sum(torch.isnan(dynamic)) > 0:
 			print (x, dynamic, static)
-		# dynamic, static, attn = self.encode2(dynamic, static,slf_attn_mask, non_pad_mask)
+			
 		return dynamic, static, attn
 	
-	def forward(self, x, mask=None):
+	def forward(self, x, x_chrom, mask=None):
 		x = x.long()
 		sz_b, len_seq = x.shape
 		if self.attribute_dict is not None:
@@ -695,7 +656,7 @@ class Hyper_SAGNN(nn.Module):
 			slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
 			non_pad_mask = get_non_pad_mask(x)
 			
-			dynamic, static, attn = self.get_embedding(x, slf_attn_mask, non_pad_mask)
+			dynamic, static, attn = self.get_embedding(x, x_chrom, slf_attn_mask, non_pad_mask)
 			dynamic = self.layer_norm1(dynamic)
 			static = self.layer_norm2(static)
 			
@@ -703,9 +664,8 @@ class Hyper_SAGNN(nn.Module):
 				output = (dynamic - static) ** 2
 			else:
 				output = dynamic
-			
-			output = self.dropout(output)
-			output = self.pff_classifier(output)
+			output = torch.sum(output, dim=-1, keepdim=True)
+			# output = self.pff_classifier(output)
 	
 			output = torch.sum(output * non_pad_mask, dim=-2, keepdim=False)
 			mask_sum = torch.sum(non_pad_mask, dim=-2, keepdim=False)
@@ -718,7 +678,7 @@ class Hyper_SAGNN(nn.Module):
 			return distance_proba
 		return output
 	
-	def predict(self, input, verbose=False, batch_size=96, activation=None):
+	def predict(self, input, input_chrom, verbose=False, batch_size=96, activation=None):
 		self.eval()
 		with torch.no_grad():
 			output = []
@@ -731,13 +691,15 @@ class Hyper_SAGNN(nn.Module):
 			with torch.no_grad():
 				for j in func1(math.ceil(len(input) / batch_size)):
 					x = input[j * batch_size:min((j + 1) * batch_size, len(input))]
+					x_chrom = input_chrom[j * batch_size:min((j + 1) * batch_size, len(input))]
 					x = np2tensor_hyper(x, dtype=torch.long)
+					x_chrom = torch.from_numpy(x_chrom).long().to(device)
 					if len(x.shape) == 1:
 						x = pad_sequence(x, batch_first=True, padding_value=0).to(device)
 					else:
 						x = x.to(device)
 					
-					o = self(x)
+					o = self(x, x_chrom)
 					if activation is not None:
 						o = activation(o)
 					output.append(o.detach().cpu().numpy())
@@ -1053,12 +1015,12 @@ class EncoderLayer(nn.Module):
 		self.static_nn = static_nn
 	# self.dropout = nn.Dropout(0.2)
 	
-	def forward(self, dynamic, static, slf_attn_mask, non_pad_mask):
+	def forward(self, dynamic, static, chrom_info, slf_attn_mask, non_pad_mask):
 		
 		if self.static_nn is not None:
-			static = self.static_nn(static)
+			static = self.static_nn(static, chrom_info)
 		if self.dynamic_nn is not None:
-			dynamic = self.dynamic_nn(dynamic)
+			dynamic = self.dynamic_nn(dynamic, chrom_info)
 			
 		dynamic, static1, attn = self.mul_head_attn(
 			dynamic, dynamic, static, slf_attn_mask)
@@ -1070,7 +1032,7 @@ class EncoderLayer(nn.Module):
 # Sampling positive triplets.
 # THe number of triplets from each chromosome is balanced across different chromosome
 class DataGenerator():
-	def __init__(self, edges, edge_weight, batch_size, flag=False, num_list=None):
+	def __init__(self, edges, edge_chrom, edge_weight, batch_size, flag=False, num_list=None):
 		self.batch_size = batch_size
 		self.flag = flag
 		self.k = 1
@@ -1082,6 +1044,7 @@ class DataGenerator():
 		
 		self.edges = [[] for i in range(len(self.num_list) - 1)]
 		self.edge_weight = [[] for i in range(len(self.num_list) - 1)]
+		self.edge_chrom = [[] for i in range(len(self.num_list) - 1)]
 		self.chrom_list = np.arange(len(self.num_list) - 1)
 		self.size_list = []
 		for i in range(len(self.num_list) - 1):
@@ -1089,15 +1052,18 @@ class DataGenerator():
 			self.size_list.append(np.sum(mask))
 			self.edges[i] = np.copy(edges[mask])
 			self.edge_weight[i] = np.copy(edge_weight[mask])
+			self.edge_chrom[i] = np.copy(edge_chrom[mask])
 			
 			
 			while len(self.edges[i]) <= (self.batch_size):
 				self.edges[i] = np.concatenate([self.edges[i], self.edges[i]])
 				self.edge_weight[i] = np.concatenate([self.edge_weight[i], self.edge_weight[i]])
+				self.edge_chrom[i] = np.concatenate([self.edge_chrom[i], self.edge_chrom[i]])
 			
 			index = np.random.permutation(len(self.edges[i]))
 			self.edges[i] = (self.edges[i])[index]
 			self.edge_weight[i] = (self.edge_weight[i])[index]
+			self.edge_chrom[i] = (self.edge_chrom[i])[index]
 		
 		self.pointer = np.zeros(int(np.max(self.chrom_list) + 1)).astype('int')
 		self.size_list /= np.sum(self.size_list)
@@ -1105,6 +1071,7 @@ class DataGenerator():
 	def next_iter(self):
 		chroms = np.random.choice(self.chrom_list, p=self.size_list, size=self.k, replace=False)
 		e_list = []
+		c_list = []
 		w_list = []
 		for chrom in chroms:
 			self.pointer[chrom] += self.batch_size
@@ -1113,15 +1080,18 @@ class DataGenerator():
 				index = np.random.permutation(len(self.edges[chrom]))
 				self.edges[chrom] = (self.edges[chrom])[index]
 				self.edge_weight[chrom] = (self.edge_weight[chrom])[index]
+				self.edge_chrom[chrom] = (self.edge_chrom[chrom])[index]
 				self.pointer[chrom] = self.batch_size
 			
 			index = range(self.pointer[chrom] - self.batch_size, min(self.pointer[chrom], len(self.edges[chrom])))
-			e, w = (self.edges[chrom])[index], (self.edge_weight[chrom])[index]
+			e, c, w = (self.edges[chrom])[index], (self.edge_chrom[chrom])[index], (self.edge_weight[chrom])[index]
 			e_list.append(e)
+			c_list.append(c)
 			w_list.append(w)
 		e = np.concatenate(e_list, axis=0)
+		c = np.concatenate(c_list, axis=0)
 		w = np.concatenate(w_list, axis=0)
-		return e, w
+		return e, c, w
 
 
 class MeanAggregator(nn.Module):
@@ -1145,9 +1115,10 @@ class MeanAggregator(nn.Module):
 		self.start_end_dict = start_end_dict
 		
 		# If the feature function comes from a graphsage encoder, use the cell_id * (bin_num+1) + bin_id as the bin_id
-		self.pass_pseudo_id =pass_pseudo_id
+		self.pass_pseudo_id = pass_pseudo_id
 		
-		print ("pass_pseudo_id", self.pass_pseudo_id)
+		print("pass_pseudo_id", self.pass_pseudo_id)
+	
 	@staticmethod
 	def list_pass(x, num_samples):
 		return x
@@ -1165,13 +1136,12 @@ class MeanAggregator(nn.Module):
 		
 		magic_number = int(self.num_list[-1] + 1)
 		
+		sample_if_long_enough = lambda to_neigh: _sample(to_neigh, num_sample) if len(
+			to_neigh) > num_sample else to_neigh
 		
-		sample_if_long_enough = lambda to_neigh : _sample(to_neigh, num_sample) if len(to_neigh) > num_sample else to_neigh
-
+		# samp_neighs = np.array([np.array(sample_if_long_enough(to_neigh)) for to_neigh in to_neighs])
+		samp_neighs = np.array(to_neighs)
 		
-		
-		samp_neighs = np.array([np.array(sample_if_long_enough(to_neigh)) for to_neigh in to_neighs])
-			
 		if self.pass_pseudo_id:
 			cell_ids = (nodes / magic_number).detach().cpu().numpy()
 			if len(samp_neighs.shape) == 1:
@@ -1187,7 +1157,6 @@ class MeanAggregator(nn.Module):
 		row_indices = []
 		v = []
 		
-		
 		for i, samp_neigh in enumerate(samp_neighs):
 			samp_neigh = set(samp_neigh)
 			for n in samp_neigh:
@@ -1195,11 +1164,10 @@ class MeanAggregator(nn.Module):
 					unique_nodes[n] = count
 					unique_nodes_list.append(n)
 					count += 1
-					
+				
 				column_indices.append(unique_nodes[n])
 				row_indices.append(i)
 				v.append(1 / len(samp_neigh))
-				
 		
 		# # random dropout
 		# dropout_rate = 0.2
@@ -1210,14 +1178,13 @@ class MeanAggregator(nn.Module):
 		# v = np.array(v)
 		# v[mask] = 0.0
 		
-		
 		unique_nodes_list = torch.LongTensor(unique_nodes_list)
 		unique_real_nodes_list = (unique_nodes_list % magic_number).to(device)
 		unique_nodes_list = unique_nodes_list.to(device)
 		
 		mask = torch.sparse.FloatTensor(torch.LongTensor([row_indices, column_indices]),
-										torch.tensor(v, dtype=torch.float),
-										torch.Size([len(samp_neighs), len(unique_nodes_list)])).to(device)
+		                                torch.tensor(v, dtype=torch.float),
+		                                torch.Size([len(samp_neighs), len(unique_nodes_list)])).to(device)
 		
 		if self.pass_pseudo_id:
 			embed_matrix = self.features(unique_real_nodes_list, unique_nodes_list)
@@ -1226,7 +1193,7 @@ class MeanAggregator(nn.Module):
 		
 		to_feats = mask.mm(embed_matrix)
 		return to_feats
-
+	
 
 class MeanAggregator_with_weights(nn.Module):
 	"""
@@ -1267,7 +1234,7 @@ class MeanAggregator_with_weights(nn.Module):
 		num_sample --- number of neighbors to sample. No sampling if None.
 		"""
 		# Local pointers to functions (speed hack)
-		
+		# print (nodes_real.shape, nodes.shape, to_neighs.shape)
 		
 		magic_number = int(self.num_list[-1] + 1)
 		
@@ -1276,8 +1243,8 @@ class MeanAggregator_with_weights(nn.Module):
 		# if self.training:
 		# 	samp_neighs = np.array([np.array(sample_if_long_enough(to_neigh)) for to_neigh in to_neighs])
 		# else:
-		# 	samp_neighs = np.asarray(to_neighs)
-		samp_neighs = np.asarray(to_neighs)
+		# 	samp_neighs = np.array(to_neighs)
+		samp_neighs = np.array(to_neighs)
 		
 		if self.pass_pseudo_id:
 			cell_ids = (nodes / magic_number).detach().cpu().numpy()
@@ -1309,8 +1276,8 @@ class MeanAggregator_with_weights(nn.Module):
 			if len(samp_neigh) == 0:
 				continue
 				
-			w = samp_neigh[:, 1]
-			samp_neigh = samp_neigh[:, 0].astype('int')
+			w = samp_neigh[1]
+			samp_neigh = samp_neigh[0]
 			
 			if self.remove and self.training:
 				if remove_list is not None:
@@ -1318,11 +1285,11 @@ class MeanAggregator_with_weights(nn.Module):
 					# print (len(samp_neigh), np.sum(mask), remove_list[i], samp_neigh)
 					if len(samp_neigh) > np.sum(mask):
 					# 	print (samp_neigh, remove_list[i], samp_neigh[mask])
-						if random.random() >= 0.4:
+						if random.random() >= 0.6:
 							w, samp_neigh = w[mask], samp_neigh[mask]
 				if len(samp_neigh) == 0:
 					continue
-				
+			# print (w, samp_neigh)
 			w /= np.sum(w)
 			
 			for n in samp_neigh:
@@ -1343,6 +1310,11 @@ class MeanAggregator_with_weights(nn.Module):
 				row_indices.append(i)
 				
 			v.append(w)
+			
+		if len(v) == 0:
+			print ("no neighbors?", nodes_real, nodes, to_neighs)
+			temp = self.features(torch.zeros((1)).long().to(device))
+			return torch.zeros((len(nodes_real), temp.shape[-1])).float().to(device)
 		
 		v = np.concatenate(v, axis=0)
 		
@@ -1363,174 +1335,7 @@ class MeanAggregator_with_weights(nn.Module):
 		embed_matrix = self.features(unique_real_nodes_list, a, b)
 		to_feats = mask.mm(embed_matrix)
 		return to_feats
-	
-	
-class GraphSageEncoder(nn.Module):
-	"""
-	Encodes a node's using 'convolutional' GraphSage approach
-	"""
-	
-	def __init__(self, features, linear_features=None, feature_dim=64,
-				 embed_dim=64, node2nbr=[],
-				 num_sample=10, gcn=False, num_list=None, transfer_range=0, start_end_dict=None, pass_pseudo_id=False):
-		super(GraphSageEncoder, self).__init__()
-		
-		self.features = features
-		self.linear_features = features
-		self.feat_dim = feature_dim
-		self.node2nbr = node2nbr
-		self.aggregator = MeanAggregator(self.features, gcn, num_list, transfer_range, start_end_dict, pass_pseudo_id)
-		self.linear_aggregator = MeanAggregator(self.linear_features, gcn, num_list, transfer_range, start_end_dict, pass_pseudo_id)
-		
-		self.num_sample = num_sample
-		self.transfer_range = transfer_range
-		self.gcn = gcn
-		self.embed_dim = embed_dim
-		self.start_end_dict = start_end_dict
-		
-		input_size = 1
-		if not self.gcn:
-			input_size += 1
-		if self.transfer_range > 0:
-			input_size += 1
-		
-		self.nn = nn.Linear(input_size * self.feat_dim, embed_dim)
-		self.num_list = torch.as_tensor(num_list)
-		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
-		
-		if self.transfer_range > 0:
-			self.bin_feats_linear = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
-		if not self.gcn:
-			self.bin_feats_self = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
-		self.fix = False
-	
-	def start_fix(self):
-		self.fix = True
-		ids = (torch.arange(int(self.num_list[0])) + 1).long().to(device).view(-1)
-		self.cell_feats = self.features(ids)
-	
-	def fix_cell(self, cell, bin_id=None):
-		self.fix = True
-		
-		if bin_id is None:
-			start = int(self.num_list[0]) + 1
-			end = int(self.num_list[-1]) + 1
-			bin_id = np.arange(start, end)
-		
-		magic_number = int(self.num_list[-1] + 1)
 
-		
-		pseudo_nodes = cell * magic_number + bin_id
-		nodes_flatten = torch.from_numpy(bin_id).long().to(device)
-
-		to_neighs = self.node2nbr[pseudo_nodes]
-		pseudo_nodes = torch.from_numpy(pseudo_nodes).long()
-		neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
-											  to_neighs,
-											  self.num_sample)
-		self.bin_feats[nodes_flatten, :] = neigh_feats
-		
-		tr = self.transfer_range
-		if tr > 0:
-			start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0])
-			end = np.minimum(bin_id + tr, self.start_end_dict[bin_id, 1])
-			
-			to_neighs = np.array([list(range(s, e)) for s,e in zip(start, end)])
-			neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten, pseudo_nodes,
-														to_neighs,
-														2 * tr + 1)
-			self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear
-		
-		if not self.gcn:
-			self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten, pseudo_nodes)
-		
-		
-		
-	def forward(self, nodes, pseudo_nodes=None):
-		"""
-		Generates embeddings for a batch of nodes.
-		nodes     -- list of nodes
-		pseudo_nodes -- pseudo_nodes for getting the correct neighbors
-		"""
-		magic_number = int(self.num_list[-1] + 1)
-		tr = self.transfer_range
-		if not self.fix:
-			nodes = nodes.cpu()
-			if pseudo_nodes is not None:
-				pseudo_nodes = pseudo_nodes.cpu()
-			else:
-				if len(nodes.shape) == 1:
-					feats = self.features(nodes)
-					return feats
-			
-				pseudo_nodes = (nodes[:, 1:] + nodes[:, 0, None] * magic_number).view(-1)
-		
-		if len(nodes.shape) == 1:
-			nodes_flatten = nodes
-		else:
-			sz_b, len_seq = nodes.shape
-			nodes_flatten = nodes[:, 1:].contiguous().view(-1)
-		
-		if self.fix:
-			cell_feats = self.cell_feats[nodes[:, 0] - 1, :]
-			neigh_feats = self.bin_feats[nodes_flatten, :].view(sz_b, len_seq - 1, -1)
-			if tr > 0:
-				neigh_feats_linear = self.bin_feats_linear[nodes_flatten, :].view(sz_b, len_seq - 1, -1)
-			
-		
-		else:
-			
-			if len(nodes.shape) == 1:
-				to_neighs = self.node2nbr[pseudo_nodes.numpy()]
-				neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
-													  to_neighs,
-													  self.num_sample)
-			else:
-				cell_feats = self.features(nodes[:, 0].to(device))
-				to_neighs = self.node2nbr[pseudo_nodes.numpy()]
-				neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
-													  to_neighs,
-													  self.num_sample).view(sz_b, len_seq - 1, -1)
-			if tr > 0:
-				start = np.maximum(nodes_flatten - tr, self.start_end_dict[nodes_flatten, 0])
-				end = np.minimum(nodes_flatten + tr, self.start_end_dict[nodes_flatten, 1])
-				
-				to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)])
-				neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten,
-															 pseudo_nodes,
-															 to_neighs,
-															 2 * tr + 1)
-				if len(nodes.shape) > 1:
-					neigh_feats_linear = neigh_feats_linear.view(sz_b, len_seq - 1, -1)
-				
-				
-		
-		list1 = [neigh_feats, neigh_feats_linear] if tr > 0 else [neigh_feats]
-		
-		if not self.gcn:
-			if self.fix:
-				self_feats = self.bin_feats_self[nodes_flatten].view(sz_b, len_seq - 1, -1)
-			else:
-				if len(nodes.shape) == 1:
-					self_feats = self.features(nodes_flatten.to(device))
-				else:
-					sz_b, len_seq = nodes.shape
-					# cell_feats = self.features(nodes[:, 0])
-					self_feats = self.features(nodes_flatten.to(device), pseudo_nodes).view(sz_b, len_seq - 1, -1)
-				
-			list1.append(self_feats)
-		
-		if len(list1) > 0:
-			combined = torch.cat(list1, dim=-1)
-		else:
-			combined = list1[0]
-		
-		combined = activation_func(self.nn(combined))
-		
-		if len(nodes.shape) > 1:
-			combined = torch.cat([cell_feats[:, None, :], combined], dim=1).view(sz_b, len_seq, -1)
-			
-		return combined
 
 
 class GraphSageEncoder_with_weights(nn.Module):
@@ -1539,7 +1344,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 	"""
 	
 	def __init__(self, features, linear_features=None, feature_dim=64,
-				 embed_dim=64, node2nbr=[],
+				 embed_dim=64,
 				 num_sample=10, gcn=False, num_list=None, transfer_range=0, start_end_dict=None, pass_pseudo_id=False,
 				 remove=False, pass_remove=False):
 		super(GraphSageEncoder_with_weights, self).__init__()
@@ -1547,7 +1352,6 @@ class GraphSageEncoder_with_weights(nn.Module):
 		self.features = features
 		self.linear_features = linear_features
 		self.feat_dim = feature_dim
-		self.node2nbr = node2nbr
 		self.pass_pseudo_id = pass_pseudo_id
 		
 		# aggregator aggregates through hic graph
@@ -1572,11 +1376,9 @@ class GraphSageEncoder_with_weights(nn.Module):
 		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
 		
 		if self.transfer_range > 0:
-			self.bin_feats_linear = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float,
-												device=device)
+			self.bin_feats_linear = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
 		if not self.gcn:
-			self.bin_feats_self = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float,
-											  device=device)
+			self.bin_feats_self = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
 		self.fix = False
 		self.forward = self.forward_on_hook
 		
@@ -1585,8 +1387,9 @@ class GraphSageEncoder_with_weights(nn.Module):
 		ids = (torch.arange(int(self.num_list[0])) + 1).long().to(device).view(-1)
 		self.cell_feats = self.features(ids)
 	
-	def fix_cell(self, cell, bin_id=None):
-		
+	# Needs to be rewrite
+	def fix_cell(self, cell, nodes_chrom, bin_id=None, sparse_chrom_list=None, weighted_info=None):
+		# print (cell, nodes_chrom, bin_id)
 		self.fix = True
 		
 		if bin_id is None:
@@ -1594,29 +1397,62 @@ class GraphSageEncoder_with_weights(nn.Module):
 			end = int(self.num_list[-1]) + 1
 			bin_id = np.arange(start, end)
 		
+		if weighted_info is not None:
+			weighted_adj = True
+			cell_neighbor_list_inverse, weight_dict = weighted_info[0], weighted_info[1]
+		else:
+			weighted_adj = False
+		
 		magic_number = int(self.num_list[-1] + 1)
 		
-		pseudo_nodes = cell * magic_number + bin_id
+		pseudo_nodes = torch.from_numpy(cell * magic_number + bin_id).long().to(device)
 		nodes_flatten = torch.from_numpy(bin_id).long().to(device)
+
+		cell_ids = (pseudo_nodes / magic_number).long().detach().cpu().numpy()
+		bin_ids = (pseudo_nodes % magic_number).long().detach().cpu().numpy()
 		
-		to_neighs = self.node2nbr[pseudo_nodes]
-		pseudo_nodes = torch.from_numpy(pseudo_nodes).long()
-		neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
-											  to_neighs,
-											  self.num_sample)
-		self.bin_feats[nodes_flatten, :] = neigh_feats
+		
+		to_neighs = []
+		for c, cell_id, bin_ in zip(nodes_chrom, cell_ids, bin_ids):
+			if weighted_adj:
+				row = 0
+				for nbr_cell in cell_neighbor_list_inverse[cell]:
+					balance_weight = weight_dict[(nbr_cell, cell)]
+					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_ - 1 - int(self.num_list[c])]
+			else:
+				row = sparse_chrom_list[c][cell_id - 1][bin_ - 1 - int(self.num_list[c])]
+				
+			nbrs = row.nonzero()
+			
+			nbr_value = np.array(row.data).reshape((-1))
+			nbrs = np.array(nbrs[1]).reshape((-1)) + 1 + int(self.num_list[c])
+			if len(nbrs) > 0:
+				temp = [nbrs, nbr_value]
+			else:
+				temp = []
+			to_neighs.append(temp)
+		to_neighs = np.array(to_neighs, dtype='object')
+		
+		batch_size = 3000
+
+		for i in range(int(math.ceil(len(nodes_flatten) / batch_size))):
+			neigh_feats = self.aggregator.forward(nodes_flatten[i * batch_size : (i+1) * batch_size],
+			                                      pseudo_nodes[i * batch_size : (i+1) * batch_size],
+												  to_neighs[i * batch_size : (i+1) * batch_size],
+												  self.num_sample)
+			self.bin_feats[nodes_flatten[i * batch_size : (i+1) * batch_size], :] = neigh_feats.detach().clone()
 		
 		tr = self.transfer_range
 		if tr > 0:
 			start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0] + 1)
 			end = np.minimum(bin_id + tr, self.start_end_dict[bin_id, 1] + 1)
 			
-			to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)])
+			to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)], dtype='object')
 			
 			neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten, pseudo_nodes,
 																to_neighs,
 																2 * tr + 1)
-			self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear
+			self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear.detach().clone()
 		
 		if not self.gcn:
 			self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten, pseudo_nodes)
@@ -1650,18 +1486,19 @@ class GraphSageEncoder_with_weights(nn.Module):
 			self.off_hook_embedding = SparseEmbedding(fix_feats, False)
 		self.forward = self.forward_off_hook
 		
-	def forward_off_hook(self, nodes, pseudo_nodes=None, inverse_pseudo_node=None):
+	def forward_off_hook(self, nodes, to_neighs, pseudo_nodes=None, inverse_pseudo_node=None):
 		if pseudo_nodes is not None:
 			return self.off_hook_embedding(pseudo_nodes)
 		else:
 			return self.off_hook_embedding(nodes)
 	
-	def forward_on_hook(self, nodes, pseudo_nodes=None, inverse_pseudo_node=None):
+	def forward_on_hook(self, nodes, to_neighs, pseudo_nodes=None, inverse_pseudo_node=None):
 		"""
 		Generates embeddings for a batch of nodes.
 		nodes     -- list of nodes
 		pseudo_nodes -- pseudo_nodes for getting the correct neighbors
 		"""
+		to_neighs = to_neighs.reshape((-1))
 		magic_number = int(self.num_list[-1] + 1)
 		tr = self.transfer_range
 		if not self.fix:
@@ -1694,18 +1531,18 @@ class GraphSageEncoder_with_weights(nn.Module):
 		
 		
 		else:
-			
+			# print(nodes_flatten.shape, pseudo_nodes.shape, to_neighs.shape)
 			if len(nodes.shape) == 1:
-				to_neighs = self.node2nbr[pseudo_nodes.numpy()]
+
+				
 				neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
 													  to_neighs,
 													  self.num_sample, inverse_pseudo_node)
 			else:
 				cell_feats = self.features(nodes[:, 0].to(device))
-				to_neighs = self.node2nbr[pseudo_nodes.numpy()]
 				neigh_feats = self.aggregator.forward(nodes_flatten, pseudo_nodes,
-													  to_neighs,
-													  self.num_sample, inverse_pseudo_node).view(sz_b, len_seq - 1, -1)
+														  to_neighs,
+														  self.num_sample, inverse_pseudo_node).view(sz_b, len_seq - 1, -1)
 			if tr > 0:
 				start = np.maximum(nodes_flatten - tr, self.start_end_dict[nodes_flatten, 0])
 				end = np.minimum(nodes_flatten + tr, self.start_end_dict[nodes_flatten, 1])

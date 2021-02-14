@@ -2,6 +2,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
+def XSigmoidLoss(y_t, y_prime_t):
+	ey_t = y_t - y_prime_t
+	# return torch.mean(2 * ey_t / (1 + torch.exp(-ey_t)) - ey_t)
+	return torch.mean(2 * ey_t * torch.sigmoid(ey_t) - ey_t)
+
 
 def arcosh(x):
 	return torch.log(x + torch.sqrt(x ** 2 + 1))

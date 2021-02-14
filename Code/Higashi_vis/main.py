@@ -534,13 +534,21 @@ def str_color_update(s):
 	bar.visible = False
 	
 	l, inv = np.unique(s, return_inverse=True)
+	
 	if len(l) <= 10:
 		encoded_color = [Category10_10[xx] for xx in inv]
 	else:
-		Category20_20_temp = np.array(Category20_20)
-		Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
-		encoded_color = [Category20_20_temp[xx] for xx in inv]
-		
+		if 'm3C' not in data_selector.value:
+			Category20_20_temp = np.array(Category20_20)
+			Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
+			encoded_color = [Category20_20_temp[xx] for xx in inv]
+		else:
+			pal1 = {'L23': '#e51f4e', 'L4': '#45af4b', 'L5': '#ffe011', 'L6': '#0081cc',
+			       'Ndnf': '#ff7f35', 'Vip': '#951eb7', 'Pvalb': '#4febee',
+			       'Sst': '#ed37d9', 'Astro': '#d1f33c', 'ODC': '#f9bdbb',
+			       'OPC': '#067d81', 'MG': '#e4bcfc', 'MP': '#ab6c1e',
+			       "Endo": '#780100'}
+			encoded_color = [pal1[xx] for xx in s]
 	# s = list(s)
 	# source.patch({
 	# 	'legend_info': [(slice(len(s)), s)],
@@ -643,7 +651,10 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		v = PCA(n_components=3).fit_transform(v)
 		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
 	elif dim_reduction_selector.value == "UMAP":
+		# v = PCA(v.shape[-1]).fit_transform(v)
+		# v = StandardScaler().fit_transform(v)
 		if max(int(x_selector.value), int(y_selector.value)) < 3:
+			
 			model = UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
 		else:
 			model = UMAP(n_components=3, n_neighbors=15, min_dist=0.1)
@@ -660,6 +671,8 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		format_message()
 	elif dim_reduction_selector.value == "TSNE":
 		# v = TSNE(n_components=3, n_jobs=30).fit(v)
+		# v = PCA(v.shape[-1]).fit_transform(v)
+		# v = StandardScaler().fit_transform(v)
 		model = TSNE(n_components=2, perplexity=50, n_jobs=-1)
 		if "TSNE_params" in config:
 			params = config['TSNE_params']
@@ -712,6 +725,7 @@ def initialize(config_name, correct_color=False):
 	# generate embedding vectors
 	temp_str = "_origin"
 	v = np.load(os.path.join(temp_dir, "%s_0%s.npy" % (embedding_name, temp_str)))
+
 	cell_num = len(v)
 	if dim_reduction_selector.value == "UMAP":
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
