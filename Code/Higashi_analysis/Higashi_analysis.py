@@ -523,9 +523,10 @@ def pearson(matrix):
 
 def compartment(matrix, return_PCA=False, model=None, expected = None):
 	contact = matrix
-	# contact = KRnormalize(matrix)
+	np.fill_diagonal(contact, 1)
+	contact = KRnormalize(matrix)
 	contact[np.isnan(contact)] = 0.0
-	contact = sqrt_norm(matrix)
+	# contact = sqrt_norm(matrix)
 	contact = oe(contact, expected)
 	np.fill_diagonal(contact, 1)
 	with warnings.catch_warnings():
