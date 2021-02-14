@@ -27,6 +27,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 - numpy (tested on 1.19.2)
 - pandas (tested on 1.1.3)
 - pytorch (tested on 1.4.0)
+- fbpca (tested on 1.0.0)
 - scikit-learn (tested on 0.23.2)
 - tqdm (tested on 4.50.2)
 
@@ -43,6 +44,16 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 **Note**: It is known that under pytorch 1.7.0, there will be a "backward error" (required FloatTensor but received DoubleTensor.) We are inspecting the cause of the error. The library will be upgraded to support the latest pytorch.
 
 
+## Change Log
+
+### 2021-2-14
+#### Features
+- We now use fbpca to handle PCA of extremely large feature matrices
+- Beta version of removing batch effects of scHi-C (by including batch_id as part of the input)
+- Memory usage optimization (The memory usage is now 20% of the previous version on the sn-m3c-seq dataset)
+- Remove the optional smmoth and quantile normalization option due to computational efficiency
+
+[History change log](https://github.com/ma-compbio/Higashi/blob/main/Changelog.md)
 
 
 ## How to use
