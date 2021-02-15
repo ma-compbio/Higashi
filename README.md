@@ -53,6 +53,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 - Memory usage optimization (The memory usage is now 20% of the previous version on the sn-m3c-seq dataset)
 - Remove the optional smoothing and quantile normalization options due to computational efficiency
 - Allow customizable UMAP/TSNE parameters for Higashi-vis
+- Include linear-conv+rwr imputation results for visualization
 
 [History change log](https://github.com/ma-compbio/Higashi/blob/main/Changelog.md)
 
