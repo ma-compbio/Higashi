@@ -330,62 +330,6 @@ def impute_all():
 				
 				f.create_dataset("cell_%d" % (i), data=v)
 	
-	
-# Optional imputation for similar sparsity
-def optional_impute_for_cell_adj():
-	print ("optional impute")
-	get_free_gpu()
-	for c in chrom_list:
-		a = np.load(os.path.join(temp_dir, "%s_cell_adj.npy" % c), allow_pickle=True).item()
-		a = np.array(a.todense())
-		
-		impute_list = []
-		sparsity = np.sum(a > 0 ,axis=-1) / a.shape[-1]
-		upsampling2 = min(np.median(sparsity) * 2, 0.5)
-		
-		
-		for i, m in enumerate(tqdm(a)):
-			b = m.reshape((int(np.sqrt(len(m))), -1))
-			# b = np.array(m.todense())
-			sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
-			# while sparsity < min(upsampling2 * 1.5, 1.0):
-			# 	# print ("sparsity", sparsity)
-			# 	b = conv_only(b)
-			# 	sparsity = np.sum(b > 0) / (b.shape[0] * b.shape[1])
-			b = conv_only(b)
-			# b = conv_only(b)
-			# b = impute_gpu(b)
-			# np.fill_diagonal(b, 0)
-			impute_list.append(b.reshape((-1)))
-			
-		impute_list = np.stack(impute_list, axis=0)
-		# print(impute_list.shape)
-		# thres = np.percentile(impute_list, 100 * (1 - upsampling2), axis=1)
-		# # print(thres)
-		# impute_list = (impute_list > thres[:, None]).astype('float32') * impute_list
-		# print(impute_list)
-		# impute_list = csr_matrix(impute_list)
-		sparsity = np.sum(impute_list > 0, axis=-1) / impute_list.shape[-1]
-		# print("sparsity", upsampling2, np.median(sparsity), np.min(sparsity), np.max(sparsity))
-		np.save(os.path.join(temp_dir, "%s_cell_impute.npy" % c), impute_list)
-
-# Optional quantile normalization
-def quantileNormalize(temp):
-	temp = pd.DataFrame(temp.T)
-	
-	df = temp.copy()
-	#compute rank
-	dic = {}
-	for col in df:
-		dic.update({col : sorted(df[col])})
-	sorted_df = pd.DataFrame(dic)
-	rank = sorted_df.mean(axis = 1).tolist()
-	#sort
-	for col in df:
-		t = np.searchsorted(np.sort(df[col]), df[col])
-		df[col] = [rank[i] for i in t]
-	return np.array(df).T
-
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	# print (np.sum(temp1 > 0, axis=0))

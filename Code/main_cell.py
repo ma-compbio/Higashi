@@ -10,12 +10,11 @@ from Impute import impute_process
 import argparse
 import resource
 
-from sklearn.metrics import adjusted_rand_score
 from sklearn.preprocessing import KBinsDiscretizer, StandardScaler, MinMaxScaler
 import pickle
 import subprocess
 
-from collections import Counter
+import h5py
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi main program")
@@ -25,36 +24,40 @@ def parse_args():
 	return parser.parse_args()
 
 
-
-def get_free_gpu():
+def get_free_gpu(num=1):
 	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')
 	memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
 	if len(memory_available) > 0:
 		max_mem = np.max(memory_available)
 		ids = np.where(memory_available == max_mem)[0]
-		chosen_id = int(np.random.choice(ids, 1)[0])
-		print("setting to gpu:%d" % chosen_id)
-		torch.cuda.set_device(chosen_id)
-		return "cuda:%d" % chosen_id
+		if num == 1:
+			chosen_id = int(np.random.choice(ids, 1)[0])
+			print("setting to gpu:%d" % chosen_id)
+			torch.cuda.set_device(chosen_id)
+			return "cuda:%d" % chosen_id
+		else:
+			return np.random.choice(ids, num)
+		
 	else:
 		return
 
-
-def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
+def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_chrom, y):
 	x = batch_data
 	w = batch_weight
-	pred = model(x)
+	pred = model(x, batch_chrom)
 	
 	if use_recon:
 		adj = node_embedding_init.embeddings[0](cell_ids)
 		targets = node_embedding_init.targets[0](cell_ids)
-		_, recon = node_embedding_init.wstack[0](adj, return_recon=True)
-		mse_loss = F.mse_loss(recon, targets, reduction="mean") #/ len(adj) / adj.shape[-1] * 800
+		embed, recon = node_embedding_init.wstack[0](adj, return_recon=True)
+		mse_loss = F.mse_loss(recon, targets)
+		# mse_loss = XSigmoidLoss(recon, targets)
 	else:
 		mse_loss = torch.as_tensor([0], dtype=torch.float).to(device)
 		
 		
 	if mode == 'classification':
+		label = y
 		main_loss = loss_func(pred, y, weight=w)
 		
 	elif mode == 'rank':
@@ -65,21 +68,22 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, y):
 		diff = diff[mask_rank].float()
 		diff_w = diff_w[mask_rank]
 		label = (diff_w > 0).float()
+		# main_loss = torch.mean(torch.clamp(- diff * label + margin, min=0.0))
 		main_loss = loss_func(diff, label)
 		
-		if not use_recon:
-			if neg_num > 0:
-				mask_w_eq_zero = w == 0
-				makeitzero = F.mse_loss(w[mask_w_eq_zero], pred[mask_w_eq_zero])
-				mse_loss += makeitzero
-		
+		# if not use_recon:
+		# 	if neg_num > 0:
+		# 		mask_w_eq_zero = w == 0
+		# 		makeitzero = F.mse_loss(w[mask_w_eq_zero], pred[mask_w_eq_zero])
+		# 		mse_loss += makeitzero
+	elif mode == 'regression':
+		label = w
+		main_loss =  F.mse_loss(pred, w)
 	else:
 		print ("wrong mode")
 		raise EOFError
-
-	domain_loss = torch.as_tensor([0], dtype=torch.float).to(device)
 	
-	return pred, main_loss, mse_loss, domain_loss
+	return pred, main_loss, mse_loss
 
 
 def train_epoch(model, loss_func, training_data_generator, optimizer_list):
@@ -91,43 +95,70 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	
 	bce_total_loss = 0
 	mse_total_loss = 0
-	domain_total_loss = 0
 	final_batch_num = 0
 	
 	batch_num = int(update_num_per_training_epoch / collect_num)
 	
-	pool = ProcessPoolExecutor(max_workers=int(cpu_num*1.5))
+	pool = ProcessPoolExecutor(max_workers=cpu_num)
 	p_list = []
 	y_list, pred_list = [], []
 	
 	bar = trange(batch_num * collect_num, desc=' - (Training) ', leave=False, )
 	for i in range(batch_num):
-		edges_part, edge_weight_part = training_data_generator.next_iter()
-		p_list.append(pool.submit(one_thread_generate_neg, edges_part, edge_weight_part, "train_dict"))
+		edges_part, edges_chrom, edge_weight_part = training_data_generator.next_iter()
+		p_list.append(pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part))
 	
 	for p in as_completed(p_list):
-		batch_edge_big, batch_y_big, batch_edge_weight_big = p.result()
+		batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big = p.result()
 		batch_edge_big = np2tensor_hyper(batch_edge_big, dtype=torch.long)
 		batch_y_big, batch_edge_weight_big = torch.from_numpy(batch_y_big), torch.from_numpy(batch_edge_weight_big)
-		# 	batch_edge_big, batch_y_big, batch_edge_weight_big = one_thread_generate_neg(edges_part, edge_weight_part, "train_dict")
+		
 		batch_edge_big, batch_y_big, batch_edge_weight_big = batch_edge_big.to(device), batch_y_big.to(
 			device), batch_edge_weight_big.to(device)
 		size = int(len(batch_edge_big) / collect_num)
 		for j in range(collect_num):
-			batch_edge, batch_edge_weight, batch_y = batch_edge_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
-			                                         batch_edge_weight_big[
-			                                         j * size: min((j + 1) * size, len(batch_edge_big))], \
-			                                         batch_y_big[j * size: min((j + 1) * size, len(batch_edge_big))]
+			batch_edge, batch_edge_weight, batch_y, batch_chrom = batch_edge_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
+													 batch_edge_weight_big[
+													 j * size: min((j + 1) * size, len(batch_edge_big))], \
+													 batch_y_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
+													 batch_chrom_big[j * size: min((j + 1) * size, len(batch_edge_big))]
 			
-			pred, loss_bce, loss_mse, loss_domain = forward_batch_hyperedge(model, loss_func, batch_edge,
-			                                                                batch_edge_weight, y=batch_y)
+			pred, loss_bce, loss_mse = forward_batch_hyperedge(model, loss_func, batch_edge,
+																			batch_edge_weight, batch_chrom, y=batch_y)
+			
 			
 			y_list.append(batch_y)
 			pred_list.append(pred)
 			
 			final_batch_num += 1
-			train_loss = alpha * loss_bce + beta * loss_mse
-			# print (train_loss, loss_bce, loss_mse)
+			
+			for opt in optimizer_list:
+				opt.zero_grad()
+			loss_bce.backward(retain_graph=True)
+			
+			main_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
+			
+			if use_recon:
+				for opt in optimizer_list:
+					opt.zero_grad()
+				loss_mse.backward(retain_graph=True)
+
+				recon_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
+				ratio = beta * main_norm / recon_norm
+				ratio = max(ratio, 1.0)
+				contractive_loss = 0.0
+				for i in range(len(node_embedding_init.wstack[0].weight_list)):
+					contractive_loss += torch.sum(node_embedding_init.wstack[0].weight_list[i] ** 2) + \
+					                    torch.sum(node_embedding_init.wstack[0].reverse_weight_list[i] ** 2)
+					
+			else:
+				contractive_loss = 0.0
+				ratio = 0.0
+			
+			
+			
+			train_loss = alpha * loss_bce + ratio * loss_mse + 1e-3 * contractive_loss
+			
 			for opt in optimizer_list:
 				opt.zero_grad()
 			
@@ -138,13 +169,12 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 			for opt in optimizer_list:
 				opt.step()
 			bar.update(n=1)
-			bar.set_description(" - (Training) BCE:  %.3f MSE: %.3f Domain: %.3f Loss: %.3f" %
-			                    (loss_bce.item(), loss_mse.item(), loss_domain.item(), train_loss.item()),
-			                    refresh=False)
+			bar.set_description(" - (Training) BCE:  %.3f MSE: %.3f Loss: %.3f norm_ratio: %.2f"  %
+								(loss_bce.item(), loss_mse.item(),  train_loss.item(), ratio),
+								refresh=False)
 			
 			bce_total_loss += loss_bce.item()
 			mse_total_loss += loss_mse.item()
-			domain_total_loss += loss_domain.item()
 		p_list.remove(p)
 		del p
 	
@@ -153,7 +183,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	auc1, auc2 = roc_auc_cuda(y, pred)
 	pool.shutdown(wait=True)
 	bar.close()
-	return bce_total_loss / final_batch_num, mse_total_loss / final_batch_num, domain_total_loss / final_batch_num, accuracy(
+	return bce_total_loss / final_batch_num, mse_total_loss / final_batch_num, accuracy(
 		y, pred), auc1, auc2
 
 
@@ -166,15 +196,14 @@ def eval_epoch(model, loss_func, validation_data_generator):
 		pred, label = [], []
 		auc1_list, auc2_list = [], []
 		for i in tqdm(range(update_num_per_eval_epoch), desc='  - (Validation)   ', leave=False):
-			edges_part, edge_weight_part = validation_data_generator.next_iter()
+			edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
 			
-			batch_x, batch_y, batch_w = one_thread_generate_neg(edges_part, edge_weight_part,
-			                                                    "test_dict")
+			batch_x, batch_y, batch_w, batch_chrom = one_thread_generate_neg(edges_part, edges_chrom, edge_weight_part)
 			batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
 			batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
 			batch_x, batch_y, batch_w = batch_x.to(device), batch_y.to(device), batch_w.to(device)
 			
-			pred_batch, eval_loss, _, _ = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, y=batch_y)
+			pred_batch, eval_loss, _ = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, batch_chrom, y=batch_y)
 			
 			pred.append(pred_batch)
 			label.append(batch_y)
@@ -192,18 +221,23 @@ def eval_epoch(model, loss_func, validation_data_generator):
 	return bce_total_loss / (i + 1), acc, np.mean(auc1_list), np.mean(auc2_list)
 
 
-def generate_negative_cpu(x, dict_type, forward=True):
+def check_nonzero(x, c):
+	# minus 1 because add padding index
+	# print(2, sparse_chrom_list[c][x[0]-1])
+	# print (3, sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c+1], x[2]-1-chrom_start_end[c, 0]])
+	if len(neighbor_mask) > 1:
+		dim = sparse_chrom_list[c][x[0]-1].shape[-1]
+		return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
+	else:
+		return sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
+		# print("simple", x, start_end_dict[int(x[1])], num_list)
+		# print (c, sparse_chrom_list[c][x[0] - 1].shape, num_list[c], x[1] - 1 - num_list[c], x[2] - 1 - num_list[c])
+		# raise EOFError
+def generate_negative_cpu(x, x_chrom, forward=True):
 	global pair_ratio
 	rg = np.random.default_rng()
-	if dict_type == 'train_dict':
-		dict1 = [train_dict, test_dict]
 	
-	elif dict_type == 'test_dict':
-		dict1 = [train_dict, test_dict]
-	else:
-		dict1 = []
-	
-	neg_list, new_index = [], []
+	neg_list, neg_chrom = [], []
 	
 	if forward:
 		func1 = pass_
@@ -219,11 +253,9 @@ def generate_negative_cpu(x, dict_type, forward=True):
 		
 		for i in range(neg_num):
 			temp = np.copy(sample)
-			a = {tuple(temp)}
 			change = change_list_all[j, i]
 			trial = 0
-			
-			while any([not a.isdisjoint(d) for d in dict1]):
+			while check_nonzero(temp, x_chrom[j]):
 				temp = np.copy(sample)
 				
 				# Try too many times on one samples, move on
@@ -246,21 +278,11 @@ def generate_negative_cpu(x, dict_type, forward=True):
 						temp[change] = np.random.randint(
 							int(start), int(end), 1) + 1
 					else:
-						
-						if dict_type == 'train_dict':
-							temp[change] = rg.choice(train_cell) + 1
-						elif dict_type == 'test_dict':
-							temp[change] = rg.choice(test_cell) + 1
-						else:
-							temp[change] = rg.choice(end - start) + start + 1
+						temp[change] = rg.choice(end - start) + start + 1
+					# print ("hard")
 				else:
-					if dict_type == 'train_dict':
-						temp[0] = rg.choice(train_cell) + 1
-					elif dict_type == 'test_dict':
-						temp[0] = rg.choice(test_cell) + 1
-					else:
-						start, end = start_end_dict[int(temp[0])]
-						temp[0] = rg.choice(end - start) + start + 1
+					start, end = start_end_dict[int(temp[0])]
+					temp[0] = rg.choice(end - start) + start + 1
 					
 					start, end = start_end_dict[int(temp[1])]
 					
@@ -270,6 +292,7 @@ def generate_negative_cpu(x, dict_type, forward=True):
 					end = min(end, temp[1] + max_bin)
 					
 					temp[2] = rg.choice(end - start) + start + 1
+					
 				
 				temp.sort()
 				
@@ -277,18 +300,16 @@ def generate_negative_cpu(x, dict_type, forward=True):
 				if ((temp[2] - temp[1]) >= max_bin) or (temp[1] == temp[2]) or ((temp[2] - temp[1]) < min_bin):
 					temp = np.copy(sample)
 				
-				if len(neighbor_mask) > 1:
-					a = get_neighbor(temp)
-				else:
-					a = {tuple(temp)}
+				
 			
 			if len(temp) > 0:
 				neg_list.append(temp)
+				neg_chrom.append(x_chrom[j])
 	
-	return neg_list
+	return neg_list, neg_chrom
 
 
-def one_thread_generate_neg(edges_part, edge_weight, dict_type):
+def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 	if neg_num == 0:
 		# pos_weight = torch.tensor(edge_weight)
 		# pos_part = np2tensor_hyper(edges_part, dtype=torch.long)
@@ -297,31 +318,63 @@ def one_thread_generate_neg(edges_part, edge_weight, dict_type):
 		x = edges_part
 	else:
 		try:
-			neg_list = np.array(generate_negative_cpu(edges_part, dict_type, True))
-			# pos_weight = torch.tensor(edge_weight)
-			neg_list = neg_list[: len(edges_part) * neg_num, :]
+			neg_list, neg_chrom = generate_negative_cpu(edges_part, edges_chrom, True)
+			neg_list = np.array(neg_list)[: len(edges_part) * neg_num, :]
+			neg_chrom = np.array(neg_chrom)[: len(edges_part) * neg_num]
 			if len(neg_list) == 0:
 				raise EOFError
-			# neg = np2tensor_hyper(neg_list, dtype=torch.long)
-			# pos_part = np2tensor_hyper(edges_part, dtype=torch.long)
 			
 			correction = 1.0 if mode == "classification" else 0.0
 			y = np.concatenate([np.ones((len(edges_part), 1)),
-			                    np.zeros((len(neg_list), 1))])
+								np.zeros((len(neg_list), 1))])
 			w = np.concatenate([np.ones((len(edges_part), 1)) * edge_weight.reshape((-1, 1)),
-			                    np.ones((len(neg_list), 1)) * correction])
+								np.ones((len(neg_list), 1)) * correction])
 			x = np.concatenate([edges_part, neg_list])
+			x_chrom = np.concatenate([edges_chrom, neg_chrom])
 		except Exception as e:
 			print("error from generate neg", e)
 			raise EOFError
 	
 	index = np.random.permutation(len(x))
-	x, y, w = x[index], y[index], w[index]
+	x, y, w, x_chrom = x[index], y[index], w[index], x_chrom[index]
 	
-	return x, y, w
+	
+		
+		
+	
+	if isinstance(higashi_model.encode1.dynamic_nn, GraphSageEncoder_with_weights):
+		cell_ids = np.stack([x[:, 0], x[:, 0]], axis=-1).reshape((-1))
+		bin_ids = x[:, 1:].reshape((-1))
+		nodes_chrom = np.stack([x_chrom, x_chrom], axis=-1).reshape((-1))
+		to_neighs = []
+		for c, cell_id, bin_id in zip(nodes_chrom, cell_ids, bin_ids):
+			if weighted_adj:
+				row = 0
+				for nbr_cell in cell_neighbor_list_inverse[cell_id]:
+					balance_weight = weight_dict[(nbr_cell, cell_id)]
+					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
+			else:
+				row = sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
+			
+			
+			nbrs = row.nonzero()
+			
+			nbr_value = np.array(
+				row.data).reshape((-1))
+			nbrs = np.array(nbrs[1]).reshape((-1)) + 1 + num_list[c]
+			if len(nbrs) > 0:
+				temp = [nbrs, nbr_value]
+			else:
+				temp = []
+			to_neighs.append(temp)
+		to_neighs = np.array(to_neighs).reshape((-1, 2))
+	else:
+		to_neighs = x_chrom
+	
+	return x, y, w, to_neighs
 
 
-def train(model, loss, training_data, validation_data, optimizer, epochs, batch_size, load_first, save_embed=False):
+def train(model, loss, training_data_generator, validation_data_generator, optimizer, epochs, batch_size, load_first, save_embed=False):
 	global pair_ratio
 	no_improve = 0
 	if load_first:
@@ -330,34 +383,26 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 	
 	valid_accus = [0]
 	train_accus = []
-	edges, edge_weight = training_data
-	validation_data, validation_weight = validation_data
-	
-	training_data_generator = DataGenerator(edges, edge_weight, int(batch_size / (neg_num + 1) * collect_num),
-	                                              True, num_list)
-	validation_data_generator = DataGenerator(validation_data, validation_weight, int(batch_size / (neg_num + 1)),
-	                                                False, num_list)
+
 	
 	
 	for epoch_i in range(epochs):
 		if save_embed:
-			save_embeddings(model, True)
-			save_embeddings(model, False)
+			save_embeddings(model)
 		
 		print('[ Epoch', epoch_i, 'of', epochs, ']')
 		
 		start = time.time()
 		
-		bce_loss, mse_loss, domain_loss, train_accu, auc1, auc2 = train_epoch(
+		bce_loss, mse_loss, train_accu, auc1, auc2 = train_epoch(
 			model, loss, training_data_generator, optimizer)
-		print('  - (Training)   bce: {bce_loss: 7.4f}, mse: {mse_loss: 7.4f}, domain: {domain_loss: 7.4f},'
-		      ' acc: {accu:3.3f} %, auc: {auc1:3.3f}, aupr: {auc2:3.3f}, '
-		      'elapse: {elapse:3.3f} s'.format(
+		print('  - (Training)   bce: {bce_loss: 7.4f}, mse: {mse_loss: 7.4f}, '
+			  ' acc: {accu:3.3f} %, auc: {auc1:3.3f}, aupr: {auc2:3.3f}, '
+			  'elapse: {elapse:3.3f} s'.format(
 			bce_loss=bce_loss,
 			mse_loss=mse_loss,
-			domain_loss=domain_loss,
 			accu=100 *
-			     train_accu,
+				 train_accu,
 			auc1=auc1,
 			auc2=auc2,
 			elapse=(time.time() - start)))
@@ -365,12 +410,12 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 		start = time.time()
 		valid_bce_loss, valid_accu, valid_auc1, valid_auc2 = eval_epoch(model, loss, validation_data_generator)
 		print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
-		      '  acc: {accu:3.3f} %,'
-		      ' auc: {auc1:3.3f}, aupr: {auc2:3.3f},'
-		      'elapse: {elapse:3.3f} s'.format(
+			  '  acc: {accu:3.3f} %,'
+			  ' auc: {auc1:3.3f}, aupr: {auc2:3.3f},'
+			  'elapse: {elapse:3.3f} s'.format(
 			bce_loss=valid_bce_loss,
 			accu=100 *
-			     valid_accu,
+				 valid_accu,
 			auc1=valid_auc1,
 			auc2=valid_auc2,
 			elapse=(time.time() - start)))
@@ -403,39 +448,34 @@ def train(model, loss, training_data, validation_data, optimizer, epochs, batch_
 	start = time.time()
 	valid_bce_loss, valid_accu, valid_auc1, valid_auc2 = eval_epoch(model, loss, validation_data_generator)
 	print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
-	      '  acc: {accu:3.3f} %,'
-	      ' auc: {auc1:3.3f}, aupr: {auc2:3.3f},'
-	      'elapse: {elapse:3.3f} s'.format(
+		  '  acc: {accu:3.3f} %,'
+		  ' auc: {auc1:3.3f}, aupr: {auc2:3.3f},'
+		  'elapse: {elapse:3.3f} s'.format(
 		bce_loss=valid_bce_loss,
 		accu=100 *
-		     valid_accu,
+			 valid_accu,
 		auc1=valid_auc1,
 		auc2=valid_auc2,
 		elapse=(time.time() - start)))
 
 
 def get_neighbor(x):
-	result = set()
+	
 	a = np.copy(x)
 	temp = (a + neighbor_mask)
 	temp = np.sort(temp, axis=-1)
-	
-	for t in temp:
-		result.add(tuple(t))
-	return result
+	return list(temp)
 
 
-def save_embeddings(model, origin=False):
+def save_embeddings(model):
 	model.eval()
 	with torch.no_grad():
 		ids = torch.arange(1, num_list[-1] + 1).long().to(device).view(-1)
 		embeddings = []
 		for j in range(math.ceil(len(ids) / batch_size)):
 			x = ids[j * batch_size:min((j + 1) * batch_size, len(ids))]
-			if origin:
-				embed = node_embedding_init(x)
-			else:
-				embed = model.node_embedding(x)
+			
+			embed = node_embedding_init(x)
 			embed = embed.detach().cpu().numpy()
 			embeddings.append(embed)
 		
@@ -444,17 +484,15 @@ def save_embeddings(model, origin=False):
 			start = 0 if i == 0 else num_list[i - 1]
 			static = embeddings[int(start):int(num_list[i])]
 			
-			if origin:
-				if i == 0:
-					try:
-						old_static = np.load(os.path.join(temp_dir, "%s_%d_origin.npy" % (embedding_name, i)))
-						update_rate = np.sum((old_static - static) ** 2, axis=-1) / np.sum(old_static ** 2, axis=-1)
-						print("update_rate: %f\t%f" % (np.min(update_rate), np.max(update_rate)))
-					except Exception as e:
-						pass
-				np.save(os.path.join(temp_dir, "%s_%d_origin.npy" % (embedding_name, i)), static)
-			else:
-				np.save(os.path.join(temp_dir, "%s_%d.npy" % (embedding_name, i)), static)
+			
+			if i == 0:
+				try:
+					old_static = np.load(os.path.join(temp_dir, "%s_%d_origin.npy" % (embedding_name, i)))
+					update_rate = np.sum((old_static - static) ** 2, axis=-1) / np.sum(old_static ** 2, axis=-1)
+					print("update_rate: %f\t%f" % (np.min(update_rate), np.max(update_rate)))
+				except Exception as e:
+					pass
+			np.save(os.path.join(temp_dir, "%s_%d_origin.npy" % (embedding_name, i)), static)
 	
 	torch.cuda.empty_cache()
 	return embeddings
@@ -467,13 +505,11 @@ def generate_attributes():
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
-		a = StandardScaler().fit_transform(a)
+		# a = StandardScaler().fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
 	pca_after = np.concatenate(pca_after, axis=-1).astype('float32')
-	
-	
-	
+	pca_after = StandardScaler().fit_transform(pca_after.reshape((-1, 1))).reshape((len(a), -1))
 	if coassay:
 		print ("coassay")
 		cell_attributes = np.load(os.path.join(temp_dir, "pretrain_coassay.npy")).astype('float32')
@@ -492,7 +528,6 @@ def generate_attributes():
 	for i, c in enumerate(chrom_list):
 		temp = np.load(os.path.join(temp_dir, "%s_bin_adj.npy" % c)).astype('float32')
 		temp /= (np.mean(temp, axis=-1, keepdims=True) + 1e-15)
-		temp = np.eye(len(temp)).astype('float32')
 		chrom = np.zeros((len(temp), len(chrom_list))).astype('float32')
 		chrom[:, i] = 1
 		list1 = [temp, chrom]
@@ -514,68 +549,8 @@ def generate_attributes():
 	attribute_all = np.concatenate(attribute_all, axis=0)
 	attribute_dict = np.concatenate([np.zeros((num[0] + 1, attribute_all.shape[-1])), attribute_all], axis=0).astype(
 		'float32')
-	
+	# attribute_dict = StandardScaler().fit_transform(attribute_dict)
 	return embeddings, attribute_dict, targets
-
-
-def reduce_duplicate_normalize_dict(list_of_nb, num=10, identifier=0):
-	print (len(list_of_nb), identifier)
-	for i, nb in enumerate(tqdm(list_of_nb)):
-		if len(nb) == 0:
-			list_of_nb[i] = np.zeros((0, 2))
-		else:
-			new_v = np.array([[k,nb[k]] for k in nb ])
-			# new_v = np.stack([np.array(nb.keys()), np.array(nb.values())], axis=-1)
-			# print (new_v.shape)
-			del nb
-			if len(new_v) < num or num < 0:
-				list_of_nb[i] = new_v
-			else:
-				cut_off = np.sort(new_v[:, 1])[::-1]
-				cut_off = cut_off[num - 1]
-				mask = new_v[:, 1] >= cut_off
-				list_of_nb[i] = new_v[mask, :]
-	
-	return np.array(list_of_nb), identifier
-
-
-def get_bin_neighbor_list_dict(data, weight, cell_neighbor_list, cell_neighbor_weight_list, samp_num=10):
-	# Feed in data that has already + 1
-	print("start getting neighbors")
-	weight_dict = {}
-	
-	for i in trange(len(cell_neighbor_list)):
-		for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
-			weight_dict[(i, c)] = w
-	
-	cell_neighbor_list_inverse = [[] for i in range(num[0] + 1)]
-	for i, cell_nbr in enumerate(cell_neighbor_list):
-		for c in cell_nbr:
-			cell_neighbor_list_inverse[c].append(i)
-	
-	size = (cell_num + 1) * (int(num_list[-1]) + 1)
-	neighbor_list = [[] for i in trange(size)]
-	bulk_neighbor_list = []
-	
-	print ("start fill in dict")
-	for datum, w in tqdm(zip(data, weight), total=len(data)):
-		for c in cell_neighbor_list_inverse[datum[0] + 1]:
-			balance_weight = weight_dict[(c, datum[0] + 1)]
-			if type(neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1]) is list:
-				neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1] = Counter()
-			if type(neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1]) is list:
-				neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1] = Counter()
-			neighbor_list[c * (num_list[-1] + 1) + datum[1] + 1][datum[2] + 1] += w * balance_weight
-			neighbor_list[c * (num_list[-1] + 1) + datum[2] + 1][datum[1] + 1] +=  w * balance_weight
-
-	print ("finish fill in")
-	neighbor_list, _ = reduce_duplicate_normalize_dict(neighbor_list, samp_num, 0)
-	
-	# print(neighbor_list)
-	# neighbor_list = np.concatenate(result_all, axis=0)
-	return neighbor_list, bulk_neighbor_list
-
-# neighbor_list = [Counter() for i in range(size)]
 
 def get_cell_neighbor(start=1):
 	# save_embeddings(higashi_model, True)
@@ -604,8 +579,11 @@ def get_cell_neighbor(start=1):
 	return np.array(cell_neighbor_list), np.array(cell_neighbor_weight_list)
 
 
-def mp_impute(config_path, path, name, mode):
-	cmd = ["python", "Impute.py", config_path, path, name, mode]
+def mp_impute(config_path, path, name, mode, cell_start, cell_end, sparse_path, weighted_info=None):
+	cmd = ["python", "Impute.py", config_path, path, name, mode, str(int(cell_start)), str(int(cell_end)), sparse_path]
+	if weighted_info is not None:
+		cmd += [weighted_info]
+	print (cmd)
 	subprocess.call(cmd)
 
 
@@ -621,7 +599,33 @@ def get_neighbor_mask():
 			count += 1
 	return neighbor_mask
 
+
+def linkhdf5(name, cell_id_splits):
+	print ("start linking hdf5 files")
+	for chrom in impute_list:
+		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
+		for i, ids in enumerate(cell_id_splits):
+			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
+				print (input_f.keys())
+				if i == 0:
+					f.create_dataset('coordinates', data=input_f['coordinates'])
+					
+				for cell in tqdm(ids):
+					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
+		f.close()
+	for chrom in chrom_list:
+		for i in range(len(cell_id_splits)):
+			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 if __name__ == '__main__':
+	# Get parameters from config file
+	args = parse_args()
+	config = get_config(args.config)
+	cpu_num = config['cpu_num']
+	if cpu_num < 0:
+		cpu_num = int(mp.cpu_count())
+	print("cpu_num", cpu_num)
+	gpu_num = config['gpu_num']
+	print("gpu_num", gpu_num)
 	
 	if torch.cuda.is_available():
 		current_device = get_free_gpu()
@@ -631,8 +635,6 @@ if __name__ == '__main__':
 		
 	global pair_ratio
 	
-	
-	
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	print ("device", device)
 	warnings.filterwarnings("ignore")
@@ -641,27 +643,23 @@ if __name__ == '__main__':
 	
 	
 	
-	# Get parameters from config file
-	args = parse_args()
-	config = get_config(args.config)
+	
 	training_stage = args.start
 	data_dir = config['data_dir']
 	temp_dir = config['temp_dir']
 	chrom_list = config['chrom_list']
 	print (chrom_list)
 	
-	cpu_num = config['cpu_num']
-	if cpu_num < 0:
-		cpu_num = int(mp.cpu_count())
-	print("cpu_num", cpu_num)
 	
-	gpu_num = config['gpu_num']
+	
 	if gpu_num < 2:
 		non_para_impute = True
+		impute_pool = None
 	else:
 		non_para_impute = False
 		impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
-	print("cpu_num", cpu_num)
+		
+	weighted_adj = False
 	dimensions = config['dimensions']
 	impute_list = config['impute_list']
 	res = config['resolution']
@@ -712,16 +710,19 @@ if __name__ == '__main__':
 	# Now start loading data
 	data = np.load(os.path.join(temp_dir, "filter_data.npy")).astype('int')
 	weight = np.load(os.path.join(temp_dir, "filter_weight.npy")).astype('float32')
-	print (data.shape)
-	# mask = weight >= 2
-	# data = data[mask]
-	# weight = weight[mask]
-	print(data.shape)
+	chrom_info = np.load(os.path.join(temp_dir, "filter_chrom.npy")).astype('int')
+	
 	index = np.arange(len(data))
 	np.random.shuffle(index)
 	train_index = index[:int(0.85 * len(index))]
 	test_index = index[int(0.85 * len(index)):]
 	
+	if mode == 'regression':
+		# normalize by cell
+		print ("normalize by cell")
+		for cell in trange(cell_num):
+			weight[data[:, 0] == cell] /= (np.sum(weight[data[:, 0] == cell]) / 10000)
+		weight = StandardScaler().fit_transform(weight.reshape((-1,1))).reshape((-1))
 	
 	
 	total_possible = 0
@@ -755,28 +756,29 @@ if __name__ == '__main__':
 	batch_size *= (1 + neg_num)
 	
 	print("weight", weight, np.min(weight), np.max(weight))
-	weight += 1
 	# if mode == 'rank':
 	# 	weight = KBinsDiscretizer(n_bins=50, encode='ordinal', strategy='quantile').fit_transform(
 	# 		weight.reshape((-1, 1))).reshape((-1)) + 2
-	print("weight", weight, np.min(weight), np.max(weight))
-	# print ("weight distribution")
-	# for w in np.unique(weight):
-	# 	print (w, np.sum(weight == w))
 	
+	print ("partition into training/test set")
 	train_data = data[train_index]
 	train_weight = weight[train_index]
+	train_chrom = chrom_info[train_index]
 	test_data = data[test_index]
 	test_weight = weight[test_index]
-	
+	test_chrom = chrom_info[test_index]
+	print("data", data, np.max(data), data.shape)
+	del data, weight, chrom_info
 	
 	train_mask = ((train_data[:, 2] - train_data[:, 1]) >= min_bin) & ((train_data[:, 2] - train_data[:, 1]) < max_bin)
 	train_data = train_data[train_mask]
 	train_weight = train_weight[train_mask]
+	train_chrom = train_chrom[train_mask]
 	
 	test_mask = ((test_data[:, 2] - test_data[:, 1]) >= min_bin) & ((test_data[:, 2] - test_data[:, 1]) < max_bin)
 	test_data = test_data[test_mask]
 	test_weight = test_weight[test_mask]
+	test_chrom = test_chrom[test_mask]
 	
 	
 	print("Node type num", num, num_list)
@@ -785,47 +787,41 @@ if __name__ == '__main__':
 	
 	
 	print("start_end_dict", start_end_dict.shape, start_end_dict)
-	print("data", data, np.max(data), data.shape)
-	
-	
-	train_cell = np.unique(train_data[:, 0])
-	test_cell = np.unique(test_data[:, 0])
 	
 	print(train_data, test_data)
-	try:
-		cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
-		cell_feats = np.concatenate([np.zeros((1, cell_feats.shape[-1])), cell_feats], axis=0).astype('float32')
-	except:
-		cell_feats = None
-	# print ("cell_feats", cell_feats)
+	
+	cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
+	if "batch_id" in config:
+		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
+		# print (label_info)
+		label = np.array(label_info[config["batch_id"]])
+		uniques = np.unique(label)
+		target2int = np.zeros((len(label), len(uniques)), dtype='float32')
+		
+		for i, t in enumerate(uniques):
+			target2int[label == t, i] = 1
+		cell_feats = np.concatenate([cell_feats, target2int], axis=-1)
+	cell_feats = np.concatenate([np.zeros((1, cell_feats.shape[-1])), cell_feats], axis=0).astype('float32')
+	print ("cell_feats", cell_feats)
 	embeddings_initial, attribute_dict, targets_initial = generate_attributes()
 	print ("attribute_dict.shape", attribute_dict.shape, cell_feats.shape)
-	# Add 1 for the padding index
-	print("adding pad idx")
-	train_data = add_padding_idx(train_data)
-	test_data = add_padding_idx(test_data)
+
 	
 	
 	
 	compress = False
 	initial_set = set()
-	if neg_num > 0:
-		train_dict = parallel_build_hash(train_data, "build_hash", num, initial=initial_set, compress=compress)
-		test_dict = parallel_build_hash(test_data, "build_hash", num, initial=initial_set, compress=compress)
-	else:
-		train_dict, test_dict = set(), set()
-		
-	print("dict_size", len(train_dict), len(test_dict))
+	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
 	
-	
+	print ("sparse_chrom_list.shape", sparse_chrom_list.shape)
 	print("train_weight", train_weight)
 	
 	if mode == 'classification':
 		train_weight_mean = np.mean(train_weight)
 		
 		train_weight, test_weight = transform_weight_class(train_weight, train_weight_mean, neg_num), \
-		                            transform_weight_class(test_weight, train_weight_mean, neg_num)
-	
+									transform_weight_class(test_weight, train_weight_mean, neg_num)
+		
 	print(train_weight, np.min(train_weight), np.max(train_weight))
 	print("train data amount", len(train_data))
 	
@@ -836,8 +832,7 @@ if __name__ == '__main__':
 		dimensions,
 		False,
 		num_list, targets_initial).to(device)
-	node_embedding_init.wstack[0].fit(embeddings_initial[0], 300, sparse=False, targets=torch.from_numpy(targets_initial[0]).float().to(device), batch_size=1024)
-	
+	node_embedding_init.wstack[0].fit(embeddings_initial[0], 1, sparse=False, targets=torch.from_numpy(targets_initial[0]).float().to(device), batch_size=1024)
 	
 	
 	higashi_model = Hyper_SAGNN(
@@ -845,7 +840,6 @@ if __name__ == '__main__':
 		d_model=dimensions,
 		d_k=16,
 		d_v=16,
-		node_embedding=node_embedding_init,
 		diag_mask=True,
 		bottle_neck=dimensions,
 		attribute_dict=attribute_dict,
@@ -855,42 +849,54 @@ if __name__ == '__main__':
 	
 	loss = F.binary_cross_entropy_with_logits
 	
-	for name, param in higashi_model.named_parameters():
-		print(name, param.requires_grad, param.shape)
+	# for name, param in higashi_model.named_parameters():
+	# 	print(name, param.requires_grad, param.shape)
+	
 	optimizer = torch.optim.Adam(higashi_model.parameters(),
-	                              lr=1e-3)
+								  lr=1e-3)
 	
 	
 	model_parameters = filter(lambda p: p.requires_grad, higashi_model.parameters())
 	params = sum([np.prod(p.size()) for p in model_parameters])
 	print("params to be trained", params)
 	alpha = 1.0
-	beta = 0.0 if not coassay else 1e-1
+	beta = 1e-2
 	dynamic_pair_ratio = True
-	use_recon = True
+	
+	
 	pair_ratio = 0.0
 	cell_neighbor_list = [[i] for i in range(num[0] + 1)]
 	cell_neighbor_weight_list = [[1] for i in range(num[0] + 1)]
 	
+
+	training_data_generator = DataGenerator(train_data, train_chrom, train_weight,
+											int(batch_size / (neg_num + 1) * collect_num),
+											True, num_list)
+	validation_data_generator = DataGenerator(test_data, test_chrom, test_weight,
+											  int(batch_size / (neg_num + 1)),
+											  False, num_list)
 	
 	# First round, no cell dependent GNN
 	if training_stage <= 1:
+		use_recon = False
 		higashi_model.only_distance=True
 		train(higashi_model,
 		      loss=loss,
-		      training_data=(train_data, train_weight),
-		      validation_data=(test_data, test_weight),
+		      training_data_generator=training_data_generator,
+		      validation_data_generator=validation_data_generator,
 		      optimizer=[optimizer], epochs=20, batch_size=batch_size,
 		      load_first=False, save_embed=True)
 		pair_ratio = 0.0
 		# Training Stage 1
 		higashi_model.only_distance = False
+		use_recon = True
 		train(higashi_model,
-		      loss=loss,
-		      training_data=(train_data, train_weight),
-		      validation_data=(test_data, test_weight),
-		      optimizer=[optimizer], epochs=120, batch_size=batch_size,
-		      load_first=False, save_embed=True)
+			  loss=loss,
+			  training_data_generator=training_data_generator,
+			  validation_data_generator=validation_data_generator,
+			  optimizer=[optimizer], epochs=100, batch_size=batch_size,
+			  load_first=False, save_embed=True)
+		
 		# raise KeyboardInterrupt
 		checkpoint = {
 			'model_link': higashi_model.state_dict()}
@@ -903,54 +909,33 @@ if __name__ == '__main__':
 	higashi_model.load_state_dict(checkpoint['model_link'])
 	node_embedding_init.off_hook([0])
 
-	# if training_stage <= 1:
-	# 	# Impute Stage 1
-	# 	torch.save(higashi_model, save_path+"_stage1_model")
-	# 	# impute_pool.submit(mp_impute, args.config, save_path+"_stage1_model", embedding_name + "_all", mode)
-
-	original_data = np.load(os.path.join(temp_dir, "filter_data.npy")).astype('int')
-	original_weight = np.load(os.path.join(temp_dir, "filter_weight.npy")).astype('float32')
-	mask = ((original_data[:, 2] - original_data[:, 1]) < max_bin) & ((original_data[:, 2] - original_data[:, 1]) >= min_bin)
-	original_data = original_data[mask]
-	original_weight = original_weight[mask]
-
-	# mask = original_weight >= 2
-	# original_data = original_data[mask]
-	# original_weight = original_weight[mask]
-
-
-	original_weight = np.log10(original_weight+1)
-	print ("GCN weight", original_weight, np.min(original_weight), np.max(original_weight))
-	neighbor_list, bulk_neighbor_list = get_bin_neighbor_list_dict(original_data, original_weight,
-		                                                               cell_neighbor_list, cell_neighbor_weight_list, 32)
-
 	alpha = 1.0
-	beta = 1e-2
+	beta = 1e-3
 	dynamic_pair_ratio = False
 	use_recon = False
 	pair_ratio = 0.6
 
 	remove_flag = True
 	node_embedding2 = GraphSageEncoder_with_weights(features=node_embedding_init, linear_features=node_embedding_init,
-	                                                feature_dim=dimensions,
-	                                                embed_dim=dimensions, node2nbr=neighbor_list,
-	                                                num_sample=8, gcn=False, num_list=num_list,
-	                                                transfer_range=local_transfer_range, start_end_dict=start_end_dict,
-	                                                pass_pseudo_id=False, remove=remove_flag,
-	                                                pass_remove=False).to(device)
+													feature_dim=dimensions,
+													embed_dim=dimensions,
+													num_sample=8, gcn=False, num_list=num_list,
+													transfer_range=local_transfer_range, start_end_dict=start_end_dict,
+													pass_pseudo_id=False, remove=remove_flag,
+													pass_remove=False).to(device)
 
 	higashi_model.encode1.dynamic_nn = node_embedding2
 	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
 
-	# # Second round, with cell dependent GNN, but no neighbors
+	# Second round, with cell dependent GNN, but no neighbors
 	if training_stage <= 2:
-		# Training Stage 2
+		#Training Stage 2
 		train(higashi_model,
-		      loss=loss,
-		      training_data=(train_data, train_weight),
-		      validation_data=(test_data, test_weight),
-		      optimizer=[optimizer], epochs=60, batch_size=batch_size,
-		      load_first=False, save_embed=False)
+			  loss=loss,
+			  training_data_generator=training_data_generator,
+			  validation_data_generator=validation_data_generator,
+			  optimizer=[optimizer], epochs=60, batch_size=batch_size,
+			  load_first=False, save_embed=False)
 		checkpoint = {
 				'model_link': higashi_model.state_dict()}
 
@@ -963,17 +948,17 @@ if __name__ == '__main__':
 	if training_stage <= 2:
 		# Impute Stage 2
 		if non_para_impute:
-			impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode)
+			impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
 		else:
 			torch.save(higashi_model, save_path + "_stage2_model")
-			impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute" %(embedding_name, 1), mode)
-
-
-
-
-	validation_data_generator = DataGenerator(test_data, test_weight, int(batch_size / (neg_num + 1)),
-	                                                False, num_list)
-	train_bce_loss, _, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
+			cell_id_all = np.arange(num[0])
+			print (cell_id_all)
+			cell_id_all = np.array_split(cell_id_all, gpu_num-1)
+			for i in range(gpu_num-1):
+				impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
+				time.sleep(60)
+	
+	train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 	valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
 
 	print ("train_loss", train_bce_loss, "test_loss", valid_bce_loss)
@@ -986,13 +971,21 @@ if __name__ == '__main__':
 	# Training Stage 3
 	print ("getting cell nbr's nbr list")
 	cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
-	# cell_neighbor_weight_list = [[1 / neighbor_num] * 5 for i in range(num[0] + 1)]
-	print("nbr_list",cell_neighbor_list[:10], "nbr_weight_list", cell_neighbor_weight_list[:10])
-	del neighbor_list, bulk_neighbor_list
-	neighbor_list, bulk_neighbor_list = get_bin_neighbor_list_dict(original_data, original_weight, cell_neighbor_list,
-	                                                               cell_neighbor_weight_list, 32)
+	cell_neighbor_list_inverse = [[] for i in range(num[0] + 1)]
+	for i, cell_nbr in enumerate(cell_neighbor_list):
+		for c in cell_nbr:
+			cell_neighbor_list_inverse[c].append(i)
 
-	node_embedding2.node2nbr = neighbor_list
+	weight_dict = {}
+
+	for i in trange(len(cell_neighbor_list)):
+		for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
+			weight_dict[(i, c)] = w
+	weighted_adj = True
+
+
+	
+	np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list_inverse, weight_dict]), allow_pickle=True)
 	# node_embedding2.off_hook()
 	# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,
 	#                                                 feature_dim=dimensions,
@@ -1008,10 +1001,10 @@ if __name__ == '__main__':
 
 	if training_stage <= 3:
 		train(higashi_model,
-		      loss=loss,
-		      training_data=(train_data, train_weight),
-		      validation_data=(test_data, test_weight),
-		      optimizer=[optimizer], epochs=45, batch_size=batch_size, load_first=False)
+			  loss=loss,
+			  training_data_generator=training_data_generator,
+			  validation_data_generator=validation_data_generator,
+			  optimizer=[optimizer], epochs=45, batch_size=batch_size, load_first=False)
 
 		checkpoint = {
 			'model_link': higashi_model.state_dict()}
@@ -1021,14 +1014,25 @@ if __name__ == '__main__':
 	# Loading Stage 3
 	checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
+	node_embedding_init.off_hook()
 
-	train(higashi_model,
-	      loss=loss,
-	      training_data=(train_data, train_weight),
-	      validation_data=(test_data, test_weight),
-	      optimizer=[optimizer], epochs=0, batch_size=batch_size,
-	      load_first=False, save_embed=True)
-
+	del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight, training_data_generator, validation_data_generator
+	del sparse_chrom_list, weight_dict, cell_neighbor_list_inverse
 	# Impute Stage 3
-	impute_process(args.config, higashi_model, "%s_nbr_%d_impute" %(embedding_name, neighbor_num), mode)
-	impute_pool.shutdown(wait=True)
+	if non_para_impute:
+		impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
+	else:
+		torch.save(higashi_model, save_path + "_stage3_model")
+		cell_id_all = np.arange(num[0])
+		# print (cell_id_all)
+		cell_id_all = np.array_split(cell_id_all, gpu_num)
+		for i in range(gpu_num-1):
+			impute_pool.submit(mp_impute, args.config, save_path + "_stage3_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
+			time.sleep(60)
+		impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
+		impute_pool.shutdown(wait=True)
+		linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all)
+		cell_id_all = np.arange(num[0])
+		
+		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
+		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all)
