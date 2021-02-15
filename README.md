@@ -51,7 +51,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 - We now use fbpca to handle PCA of extremely large feature matrices
 - Beta version of removing batch effects of scHi-C (by including batch_id as part of the input)
 - Memory usage optimization (The memory usage is now 20% of the previous version on the sn-m3c-seq dataset)
-- Remove the optional smmoth and quantile normalization option due to computational efficiency
+- Remove the optional smoothing and quantile normalization options due to computational efficiency
 
 [History change log](https://github.com/ma-compbio/Higashi/blob/main/Changelog.md)
 
