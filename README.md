@@ -107,8 +107,7 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  cytoband_path| str|Path of the cytoband reference file from USCS Genome Browser, will be used to remove centromere regions | "../cytoBand_hg19.txt"
 |  coassay| bool | Using co-assayed signals or not | true
 |  coassay_signal| str| Name of the co-assayed signals in the hdf5 file to use (can be empy) | "meth_cg-100kb-cg_rate"
-|  optional_smooth|bool |Smooth when calculating features for cell nodes |false
-| optional_quantile|bool |Quantile normalization when calculating feautures for cell nodes | false
+|  batch_id  | str | Optional. The name of the batch id information stored in `label_info.pickle`. The corresponding information would be used to remove batch effects | "batch id"
 
 #### Training process related parameters
 | params       |Type | description                  | example                   |
@@ -137,7 +136,11 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  cpu_num | int| Higashi is optimized for multiprocessing. Limit the number of cores to use with this param. -1 represents use all available cpu.  |-1
 |  gpu_num | int| Higashi is optimized to utilize multiple gpus for computational efficiency. Higashi won't use all these gpus throughout the time. For co-assayed data, it would use multiple gpus in the processing step. For all data, Higashi would train and impute scHi-C on different gpus for computational efficiency. This parameters should be non negative. |8
 
-
+#### Visualization related parameters
+| params       |Type | description                  | example                   |
+| UMAP_params | dict | Parameters that'll be passed to Higashi-vis. Higashi-vis will use these parameters when calculating UMAP visualization. Follow the naming convention of the package umap | {"n_neighbors": 30, "min_dist": 0.3|
+|TSNE_params | dict | Similar to UMAP_params. Follow the naming convention of tsne in sklearn | {"n_neighbors": 15}
+    
 ### Step 3: Data processing 
 Run the following commands to process the input data.
 ```bash
