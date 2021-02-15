@@ -142,7 +142,7 @@ All customizable parameters are stored in a JSON config file. An example config 
 |--------------|-----|------------------------------|---------------------------|
 | UMAP_params | dict | Parameters that'll be passed to Higashi-vis. Higashi-vis will use these parameters when calculating UMAP visualization. Follow the naming convention of the package umap | {"n_neighbors": 30, "min_dist": 0.3|
 |TSNE_params | dict | Similar to UMAP_params. Follow the naming convention of tsne in sklearn | {"n_neighbors": 15}
-    
+| random_walk | bool | Whether run linear_convolution and randomwalk-with-restart at the processing part for visualization. Code adapted from scHiCluster. Do not recommend when resolution goes higher than 100Kb. | false    
 ### Step 3: Data processing 
 Run the following commands to process the input data.
 ```bash
