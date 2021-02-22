@@ -51,7 +51,9 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 - We now use fbpca to handle PCA of extremely large feature matrices
 - Beta version of removing batch effects of scHi-C (by including batch_id as part of the input)
 - Memory usage optimization (The memory usage is now 20% of the previous version on the sn-m3c-seq dataset)
-- Remove the optional smmoth and quantile normalization option due to computational efficiency
+- Remove the optional smoothing and quantile normalization options due to computational efficiency
+- Allow customizable UMAP/TSNE parameters for Higashi-vis
+- Include linear-conv+rwr imputation results for visualization
 
 [History change log](https://github.com/ma-compbio/Higashi/blob/main/Changelog.md)
 
@@ -107,8 +109,7 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  cytoband_path| str|Path of the cytoband reference file from USCS Genome Browser, will be used to remove centromere regions | "../cytoBand_hg19.txt"
 |  coassay| bool | Using co-assayed signals or not | true
 |  coassay_signal| str| Name of the co-assayed signals in the hdf5 file to use (can be empy) | "meth_cg-100kb-cg_rate"
-|  optional_smooth|bool |Smooth when calculating features for cell nodes |false
-| optional_quantile|bool |Quantile normalization when calculating feautures for cell nodes | false
+|  batch_id  | str | Optional. The name of the batch id information stored in `label_info.pickle`. The corresponding information would be used to remove batch effects | "batch id"
 
 #### Training process related parameters
 | params       |Type | description                  | example                   |
@@ -137,7 +138,12 @@ All customizable parameters are stored in a JSON config file. An example config 
 |  cpu_num | int| Higashi is optimized for multiprocessing. Limit the number of cores to use with this param. -1 represents use all available cpu.  |-1
 |  gpu_num | int| Higashi is optimized to utilize multiple gpus for computational efficiency. Higashi won't use all these gpus throughout the time. For co-assayed data, it would use multiple gpus in the processing step. For all data, Higashi would train and impute scHi-C on different gpus for computational efficiency. This parameters should be non negative. |8
 
-
+#### Visualization related parameters
+| params       |Type | description                  | example                   |
+|--------------|-----|------------------------------|---------------------------|
+| UMAP_params | dict | Parameters that'll be passed to Higashi-vis. Higashi-vis will use these parameters when calculating UMAP visualization. Follow the naming convention of the package umap | {"n_neighbors": 30, "min_dist": 0.3|
+|TSNE_params | dict | Similar to UMAP_params. Follow the naming convention of tsne in sklearn | {"n_neighbors": 15}
+| random_walk | bool | Whether run linear_convolution and randomwalk-with-restart at the processing part for visualization. Code adapted from scHiCluster. Do not recommend when resolution goes higher than 100Kb. | false    
 ### Step 3: Data processing 
 Run the following commands to process the input data.
 ```bash
@@ -222,6 +228,7 @@ cd Code
 bokeh serve --port={PORT} --address=0.0.0.0 --allow-websocket-origin=*:{PORT} Higashi_vis/
 ```
 Finally, open a browser and go to `{IP}:{PORT}/Higashi_vis`. If you are running the program with a PC, the `{IP}` can just be localhost. If you are running this on a server, `{IP}` would be the ip address of the server. 
+Notably, the server itself should allow accession of this `{PORT}`.
 If you see the following interface, you have successfully launched the visualization tool.
 ![figs/screen.png](https://github.com/ma-compbio/Higashi/blob/main/figs/screen1.png)
 
