@@ -196,7 +196,7 @@ def process_calib_file(file_path):
 def start_call_compartment():
 	p_list = []
 	pool = ProcessPoolExecutor(max_workers=25)
-	with h5py.File(os.path.join(temp_dir, "sc_compartment.hdf5"), "w") as output_f:
+	with h5py.File(os.path.join(temp_dir, "scCompartment.hdf5"), "w") as output_f:
 		for chrom in chrom_list:
 			p_list.append(pool.submit(process_one_chrom, chrom))
 		
