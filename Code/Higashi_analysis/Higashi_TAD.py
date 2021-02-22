@@ -2,7 +2,6 @@ import numpy as np
 from scipy.signal import argrelextrema
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
-from time import time
 
 def insulation_score(m, windowsize=500000, res=10000):
 	windowsize_bin = int(windowsize / res)
@@ -122,7 +121,6 @@ class scTAD_calibrator():
 			p_list = []
 			print (self.print_identifier, "Start Epoch", epoch_count)
 			# print ("start assigning states")
-			start_time = time.time()
 			for cell in range(n_cell):
 				c_bound = sc_boundaries[cell]
 				
@@ -191,12 +189,15 @@ class scTAD_calibrator():
 					except:
 						pass
 		# shared_boundaries = shared_boundaries[np.array(kept_list)]
-		
-		
-		
-		calibrated_sc_boundaries = np.array(
-			[np.unique(self.shared_boundaries[np.array(assignment)]) for assignment in sc_assignment])
-		
+		self.shared_boundaries = np.array(self.shared_boundaries)
+		calibrated_sc_boundaries = []
+		for assignment in sc_assignment:
+			# print (assignment)
+			calibrated_sc_boundaries.append(np.unique(self.shared_boundaries[np.array(assignment).astype('int')]))
+			
+		 # = np.array(
+			# []) for assignment in sc_assignment])
+		calibrated_sc_boundaries = np.array(calibrated_sc_boundaries)
 		self.shared_boundaries = np.unique(shared_boundaries)
 		boundaries2assignment = {k:v for (v,k) in enumerate(shared_boundaries)}
 		new_sc_assignment = np.array([[boundaries2assignment[b] for b in calib_b] for calib_b in calibrated_sc_boundaries])
