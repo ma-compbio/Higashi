@@ -1,2 +1,0 @@
-# Higashi visualization
- In progress
