@@ -77,7 +77,7 @@ def create_mask(k=30):
 def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False):
 	global mask
 	# figure_size = 4 * len(matrix) / 250
-	fig = plt.figure(figsize=(8, 8))
+	fig = plt.figure(figsize=(5, 5))
 	if not cbar:
 		plt.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
 	
@@ -195,7 +195,7 @@ def async_heatmap12(selected, id):
 			for i in selected:
 				proba = np.array(f["cell_%d" % i])
 				p += proba
-				b[xs, ys] += proba
+			b[xs, ys] += p
 		b = b + b.T
 		img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
@@ -254,7 +254,7 @@ def async_heatmap22(selected, id):
 				proba = np.array(f["cell_%d" % i])
 				proba[proba <= 1e-5] = 0.0
 				p += proba
-			b[xs.astype('int'), ys.astype('int')] += proba
+			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
 		img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
@@ -285,7 +285,7 @@ def async_heatmap31(selected, id):
 				proba = np.array(f["cell_%d" % i])
 				proba[proba <= 1e-5] = 0.0
 				p += proba
-			b[xs.astype('int'), ys.astype('int')] += proba
+			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
 		img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
@@ -297,8 +297,8 @@ def async_heatmap31(selected, id):
 
 async def async_heatmap_all(selected):
 	global mask, origin_sparse, render_cache
-	source = [heatmap11_source, heatmap12_source, heatmap21_source, heatmap22_source, heatmap31_source]
-	h_list = [heatmap11, heatmap12, heatmap21, heatmap22, heatmap31]
+	source = [heatmap11_source, heatmap12_source, heatmap22_source, heatmap31_source]
+	h_list = [heatmap11, heatmap12, heatmap22, heatmap31]
 	
 	if len(selected) == 1:
 		key_name = "%s_%s_%d_%d_%d_%d" % (
@@ -320,9 +320,9 @@ async def async_heatmap_all(selected):
 	p_list = []
 	p_list.append(pool.submit(async_heatmap11, selected, 0))
 	p_list.append(pool.submit(async_heatmap12, selected, 1))
-	p_list.append(pool.submit(async_heatmap21, selected, 2))
-	p_list.append(pool.submit(async_heatmap22, selected, 3))
-	p_list.append(pool.submit(async_heatmap31, selected, 4))
+	# p_list.append(pool.submit(async_heatmap21, selected, 2))
+	p_list.append(pool.submit(async_heatmap22, selected, 2))
+	p_list.append(pool.submit(async_heatmap31, selected, 3))
 	
 	
 	#
@@ -368,7 +368,7 @@ async def async_heatmap_all(selected):
 def update_heatmap(selected):
 	print ("update_heatmap", selected)
 	if len(selected) > 0:
-		for h in [heatmap11, heatmap12, heatmap21, heatmap22, heatmap31]:
+		for h in [heatmap11, heatmap12, heatmap22, heatmap31]:
 			h.title.text += ":(loading)"
 		curdoc().add_next_tick_callback(partial(async_heatmap_all, selected))
 	
@@ -426,7 +426,7 @@ def update(attr, old, new):
 		if len(new) == 0:
 			try:
 				color_update([], [], color_selector.value)
-				for h in [heatmap11_source, heatmap12_source, heatmap21_source, heatmap22_source, heatmap31_source]:
+				for h in [heatmap11_source, heatmap12_source,  heatmap22_source, heatmap31_source]:
 					h.data['img'] = [white_img]
 			except:
 				pass
@@ -606,7 +606,8 @@ def data_update(attr, old, new):
 	print ("data_update")
 	global config
 	embed_vis.title.text = "Loading... Please wait"
-	chrom_selector.options = config['chrom_list']
+	print (config['impute_list'])
+	chrom_selector.options = config['impute_list']
 	color_selector.value = "None"
 	initialize(name2config[new], correct_color=True)
 	
@@ -714,6 +715,7 @@ def initialize(config_name, correct_color=False):
 	data_dir = config['data_dir']
 	embedding_name = config['embedding_name']
 	neighbor_num = config['neighbor_num']
+	heatmap31.title="k=%d" % neighbor_num-1
 	color_scheme = {}
 	with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
 		color_scheme = pickle.load(f)
@@ -953,8 +955,8 @@ heatmap11 = figure(toolbar_location="above",tools="pan, wheel_zoom, reset, save"
 heatmap12 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300,x_range=heatmap11.x_range, y_range=heatmap11.y_range,
 				 min_border=5,output_backend="webgl", title='conv-rwr', active_scroll = "wheel_zoom")
 
-heatmap21 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-				 min_border=5,output_backend="webgl", title='k=infinity', active_scroll = "wheel_zoom")
+# heatmap21 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
+# 				 min_border=5,output_backend="webgl", title='k=infinity', active_scroll = "wheel_zoom")
 
 heatmap22 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
 				 min_border=5,output_backend="webgl", title='k=0', active_scroll = "wheel_zoom")
@@ -962,7 +964,7 @@ heatmap22 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save
 heatmap31 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
 				 min_border=5,output_backend="webgl", title='k=4', active_scroll = "wheel_zoom")
 
-for h in [heatmap11, heatmap12, heatmap21, heatmap22, heatmap31]:
+for h in [heatmap11, heatmap12, heatmap22, heatmap31]:
 	h.xgrid.visible = False
 	h.ygrid.visible = False
 	h.xaxis.visible = False
@@ -972,12 +974,12 @@ white = np.ones((20,20,4), dtype='int8') * 255
 white_img = white.view(dtype=np.uint32).reshape((white.shape[0], -1))
 heatmap11_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap12_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-heatmap21_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+# heatmap21_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap22_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap31_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 h1 = heatmap11.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap11_source)
 h2 = heatmap12.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap12_source)
-h3 = heatmap21.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap21_source)
+# h3 = heatmap21.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap21_source)
 h4 = heatmap22.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap22_source)
 h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap31_source)
 
@@ -985,7 +987,7 @@ h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heat
 info_log = Div(text="", width = 300, height = 300, height_policy="fixed",
 				   style={'overflow-y':'scroll',
 						  'height':'300px',
-						  'width':'900px',
+						  'width':'1200px',
 						  'font-family': 'monospace',
 						  'font-size': '16px',
 						  'border': '2px solid #198EC7',
@@ -1052,8 +1054,8 @@ VC_button.on_click(anything_that_updates_heatmap_button)
 quantile_button.on_click(anything_that_updates_heatmap_button)
 layout= column(row(
 			row(
-				column(heatmap11,heatmap21, heatmap31),
-				column(heatmap12, heatmap22, info_log),
+				column(heatmap11, heatmap22, info_log),
+				column(heatmap12, heatmap31),
 			),
 			embed_vis,
 			column(
