@@ -4,7 +4,7 @@ from tqdm import tqdm, trange
 from sklearn.metrics import average_precision_score
 from sklearn.metrics import roc_auc_score, pairwise_distances
 from concurrent.futures import as_completed, ProcessPoolExecutor
-from pybloom_live import ScalableBloomFilter
+# from pybloom_live import ScalableBloomFilter
 from copy import deepcopy
 from scipy.stats import pearsonr,spearmanr
 import json
