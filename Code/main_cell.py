@@ -654,6 +654,21 @@ def linkhdf5(name, cell_id_splits):
 	for chrom in impute_list:
 		for i in range(len(cell_id_splits)):
 			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
+			
+def modify_nbr_hdf5(name1, name2):
+	for chrom in impute_list:
+		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
+		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r+")
+		
+		for id_ in f1.keys():
+			if "cell" in id_:
+				print (f2[id_])
+				f2[id_] = f2[id_] + f1[id_]
+				print(f2[id_])
+		f1.close()
+		f2.close()
+	
+	
 if __name__ == '__main__':
 	# Get parameters from config file
 	args = parse_args()
@@ -1084,3 +1099,4 @@ if __name__ == '__main__':
 
 		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
 		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all)
+	modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num))
