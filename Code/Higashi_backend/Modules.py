@@ -82,7 +82,8 @@ class TiedAutoEncoder(nn.Module):
 				 tied_list=None,
 				 add_activation=False,
 				 dropout=None,
-				 layer_norm=False):
+				 layer_norm=False,
+	             activation=None):
 		
 		super().__init__()
 		if tied_list is None:
@@ -94,6 +95,9 @@ class TiedAutoEncoder(nn.Module):
 		self.use_bias = use_bias
 		self.recon_bias_list = []
 		self.shape_list = shape_list
+		self.activation = activation
+		if self.activation is None:
+			self.activation = activation_func
 		# Generating weights for the tied autoencoder
 		for i in range(len(shape_list) - 1):
 			p = nn.parameter.Parameter(torch.ones([int(shape_list[i + 1]),
@@ -162,7 +166,7 @@ class TiedAutoEncoder(nn.Module):
 			fan_in, fan_out = torch.nn.init._calculate_fan_in_and_fan_out(self.reverse_weight_list[i])
 			bound = 1 / math.sqrt(fan_out)
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
-			
+	
 	def encoder(self, input):
 		encoded_feats = input
 		for i in range(len(self.weight_list)):
@@ -172,7 +176,7 @@ class TiedAutoEncoder(nn.Module):
 				encoded_feats = F.linear(encoded_feats, self.weight_list[i])
 			
 			if i < len(self.weight_list) - 1:
-				encoded_feats = activation_func(encoded_feats)
+				encoded_feats = self.activation(encoded_feats)
 				if self.dropout is not None:
 					encoded_feats = self.dropout(encoded_feats)
 		
@@ -180,24 +184,24 @@ class TiedAutoEncoder(nn.Module):
 			encoded_feats = self.layer_norm(encoded_feats)
 		
 		if self.add_activation:
-			encoded_feats = activation_func(encoded_feats)
+			encoded_feats = self.activation(encoded_feats)
 		return encoded_feats
 	
 	def decoder(self, encoded_feats):
 		if self.add_activation:
 			reconstructed_output = encoded_feats
 		else:
-			reconstructed_output = activation_func(encoded_feats)
-			
+			reconstructed_output = self.activation(encoded_feats)
+		
 		reverse_weight_list = self.reverse_weight_list
 		recon_bias_list = self.recon_bias_list
 		
 		for i in range(len(reverse_weight_list)):
 			reconstructed_output = F.linear(reconstructed_output, reverse_weight_list[i].t(),
-											recon_bias_list[i])
+			                                recon_bias_list[i])
 			
 			if i < len(recon_bias_list) - 1:
-				reconstructed_output = activation_func(reconstructed_output)
+				reconstructed_output = self.activation(reconstructed_output)
 		return reconstructed_output
 	
 	def forward(self, input, return_recon=False):
@@ -205,13 +209,13 @@ class TiedAutoEncoder(nn.Module):
 		encoded_feats = self.encoder(input)
 		if return_recon:
 			if not self.add_activation:
-				reconstructed_output = activation_func(encoded_feats)
+				reconstructed_output = self.activation(encoded_feats)
 			else:
 				reconstructed_output = encoded_feats
 			
 			if self.dropout is not None:
 				reconstructed_output = self.dropout(reconstructed_output)
-				
+			
 			reconstructed_output = self.decoder(reconstructed_output)
 			
 			return encoded_feats, reconstructed_output
@@ -220,15 +224,17 @@ class TiedAutoEncoder(nn.Module):
 	
 	def fit(self, data: np.ndarray,
 	        epochs=10, sparse=True, sparse_rate=None, classifier=False, early_stop=True, batch_size=-1, targets=None):
-		for name, param in self.named_parameters():
-			print(name, param.requires_grad, param.shape)
-		pca = PCA(n_components=self.shape_list[1]).fit(data)
+		# for name, param in self.named_parameters():
+		# 	print(name, param.requires_grad, param.shape)
+		
+		if self.shape_list[1] < data.shape[1]:
+			pca = PCA(n_components=self.shape_list[1]).fit(data)
+			self.weight_list[0].data = torch.from_numpy(pca.components_).float().to(device)
+			self.reverse_weight_list[-1].data = torch.from_numpy(pca.components_).float().to(device)
+			
 		optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
 		data = torch.from_numpy(data).to(device)
 		
-		
-		self.weight_list[0].data = torch.from_numpy(pca.components_).float().to(device)
-		self.reverse_weight_list[-1].data = torch.from_numpy(pca.components_).float().to(device)
 		
 		
 		if batch_size < 0:
@@ -242,11 +248,11 @@ class TiedAutoEncoder(nn.Module):
 			optimizer.zero_grad()
 			
 			if sparse:
-				loss = sparse_autoencoder_error(recon, data[batch_index], sparse_rate)
+				loss = sparse_autoencoder_error(recon, targets[batch_index], sparse_rate)
 			elif classifier:
-				loss = F.binary_cross_entropy_with_logits(recon, (data[batch_index] > 0).float())
+				loss = F.binary_cross_entropy_with_logits(recon, (targets[batch_index] > 0).float())
 			else:
-				loss = F.mse_loss(recon, data[batch_index])
+				loss = F.mse_loss(recon, targets[batch_index])  # / len(recon)
 			
 			if i == 0:
 				loss_best = float(loss.item())
@@ -265,9 +271,9 @@ class TiedAutoEncoder(nn.Module):
 						break
 			time.sleep(0.1)
 			bar.set_description("%.3f" % (loss.item()), refresh=False)
-		
-		print("loss", loss.item(),"loss best", loss_best, "epochs", i)
-		print()
+		if epochs > 0:
+			print("loss", loss.item(), "loss best", loss_best, "epochs", i)
+			print()
 		torch.cuda.empty_cache()
 	
 	def predict(self, data):
@@ -366,9 +372,9 @@ class AutoEncoder(nn.Module):
 			return encoded_feats
 	
 	def fit(self, data, epochs=10, sparse=True, sparse_rate=None, classifier=False, early_stop=True, batch_size=-1, targets=None):
-		for name, param in self.named_parameters():
-			print(name, param.requires_grad, param.shape)
-		print (self.parameters())
+		# for name, param in self.named_parameters():
+		# 	print(name, param.requires_grad, param.shape)
+		# print (self.parameters())
 		optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
 		data = torch.from_numpy(data).to(device)
 		
@@ -1399,7 +1405,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 		
 		if weighted_info is not None:
 			weighted_adj = True
-			cell_neighbor_list_inverse, weight_dict = weighted_info[0], weighted_info[1]
+			cell_neighbor_list, weight_dict = weighted_info[0], weighted_info[1]
 		else:
 			weighted_adj = False
 		
@@ -1416,7 +1422,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 		for c, cell_id, bin_ in zip(nodes_chrom, cell_ids, bin_ids):
 			if weighted_adj:
 				row = 0
-				for nbr_cell in cell_neighbor_list_inverse[cell]:
+				for nbr_cell in cell_neighbor_list[cell]:
 					balance_weight = weight_dict[(nbr_cell, cell)]
 					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_ - 1 - int(self.num_list[c])]
 			else:

@@ -7,7 +7,7 @@ from Higashi_analysis.Higashi_analysis import *
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm, trange
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, vstack
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import h5py
@@ -116,31 +116,46 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 		bin_adj[temp[i, 2] - chrom_start_end[c, 0], temp[i, 3] - chrom_start_end[c, 0]] += temp_weight[i]
 	bin_adj = bin_adj + bin_adj.T
 	read_count = []
+	
+	sparsity_metric = []
+	
 	for i in trange(cell_num):
 		mask = temp[:, 0] == i
 		temp2 = (temp[mask, 2:] - chrom_start_end[c, 0])
 		temp2_scale = np.floor(temp2 / scale_factor).astype('int')
 		temp_weight2 = temp_weight[mask]
 		
-		
 		read_count.append(np.sum(temp_weight2))
 		m1 = csr_matrix((temp_weight2, (temp2[:, 0], temp2[:, 1])), shape=(size, size))
 		m1 = m1 + m1.T
 		sparse_list.append(m1)
 		
-		m = np.zeros((cell_size, cell_size))
-		for loc, w in zip(temp2_scale, temp_weight2):
-			m[loc[0], loc[1]] += w
-		
+		# m = np.zeros((cell_size, cell_size))
+		# for loc, w in zip(temp2_scale, temp_weight2):
+		# 	m[loc[0], loc[1]] += w
+		m = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(cell_size, cell_size))
 		m = m + m.T
 
 		m = m / (np.sum(m) + 1e-15)
-		cell_adj.append(m.reshape((-1)))
-	
-	cell_adj = np.stack(cell_adj, axis=0)
-	cell_adj = csr_matrix(cell_adj)
+		cell_adj.append(m.reshape((1, -1)))
+		
+		if res_cell != 1000000:
+			scale_factor2 = int(1000000 / res)
+			size_metric = int(math.ceil(size * res / 1000000))
+			temp2_scale = np.floor(temp2 / scale_factor2).astype('int')
+			m1 = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(size_metric, size_metric))
+			m1 = m1 + m1.T
+			sparsity_metric.append(m1.reshape((1, -1)))
+			
+	# cell_adj = np.stack(cell_adj, axis=0)
+	# cell_adj = csr_matrix(cell_adj)
+	cell_adj = vstack(cell_adj).tocsr()
 	bin_adj /= cell_num
-	
+	if res_cell != 1000000:
+		# sparsity_metric = np.stack(sparsity_metric, axis=0)
+		# sparsity_metric = csr_matrix(sparsity_metric)
+		sparsity_metric = vstack(sparsity_metric).tocsr()
+		np.save(os.path.join(temp_dir, "%s_sparsity_metric_adj.npy" % chrom_list[c]), sparsity_metric)
 	np.save(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
 	
 	new_temp = []
@@ -190,7 +205,6 @@ def create_matrix():
 	np.save(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), sparse_chrom_list)
 	cell_feats = np.stack(cell_feats, axis=-1)
 	pool.shutdown(wait=True)
-	# print ("cell_feats", cell_feats.shape)
 	cell_feats = np.log10(np.array(cell_feats) + 1)
 	cell_feats = StandardScaler().fit_transform(cell_feats)
 	np.save(os.path.join(temp_dir, "cell_feats.npy"), cell_feats)
@@ -209,7 +223,7 @@ def create_matrix():
 	num = [np.max(data[:, 0]) + 1]
 	for c in chrom_start_end:
 		num.append(c[1] - c[0])
-	# print(num)
+		
 	np.save(os.path.join(temp_dir, "num.npy"), num)
 	
 	num = [0] + list(num)
@@ -224,17 +238,14 @@ def create_matrix():
 		start_end_dict[num_list[i]:num_list[i + 1], 1] = num_list[i + 1]
 		id2chrom[num_list[i] + 1:num_list[i + 1] + 1] = i - 1
 		
-	# print("start end dict", start_end_dict)
-	# print("id2chrom", id2chrom)
+
 	np.save(os.path.join(temp_dir, "start_end_dict.npy"), start_end_dict)
 	np.save(os.path.join(temp_dir, "id2chrom.npy"), id2chrom)
-	# print("data.shape", data.shape, data)
 	mask = data[:, 1] != data[:, 2]
 	weight = weight[mask]
 	data = data[mask]
 	chrom_info = chrom_info[mask]
 	
-	# print("data.shape", data.shape)
 	# Add 1 for padding idx
 	np.save(os.path.join(temp_dir, "filter_data.npy"), data + 1)
 	np.save(os.path.join(temp_dir, "filter_chrom.npy"), chrom_info)
@@ -333,38 +344,41 @@ def impute_all():
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	# print (np.sum(temp1 > 0, axis=0))
-	mask = np.array(np.sum(temp1 > 0, axis=0) > 0)
+	mask = np.array(np.sum(temp1 > 0, axis=0) > 5)
 	mask = mask.reshape((-1))
 	# if type(temp) != np.ndarray:
 	# 	temp = np.array(temp.todense())
 	size = int(total_embed_size / total_chrom_size * temp.shape[-1]) + 1
 	temp = temp[:, mask]
-	sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
-	print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
+	# sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
+	# print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
 	
-	print (c, temp)
+	# print (c, temp)
 	U, s, Vt = pca(temp, k=size)  # Automatically centers.
-	temp1 =  U[:, :size] * s[:size]
-	temp1 = StandardScaler().fit_transform(temp1)
-	if "batch_id" in config:
-		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
-		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
-		for i,u in enumerate(np.unique(batch_id_info)):
-			new_batch_id_info[batch_id_info == u, i] = 1
-	
-	
-		batch_id_info = np.array(new_batch_id_info)
-	
-		residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
-		
-		temp1 = residual.astype('float32')
-	else:
-		temp1 = temp1.astype('float32')
-	print (temp1)
-	print (temp.shape, temp1.shape)
+	temp1 =  np.array(U[:, :size] * s[:size])
+	# temp1 = StandardScaler().fit_transform(temp1)
+	# if "batch_id" in config:
+	# 	batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
+	# 	new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
+	# 	for i,u in enumerate(np.unique(batch_id_info)):
+	# 		new_batch_id_info[batch_id_info == u, i] = 1
+	#
+	#
+	# 	batch_id_info = np.array(new_batch_id_info)
+	#
+	# 	residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+	#
+	# 	temp1 = residual
+	# else:
+	# 	temp1 = np.array(temp1)
 	
 	np.save(os.path.join(temp_dir, "%s_cell_PCA.npy" % c), temp1)
+	
+def check_sparsity(temp):
 
+	total_reads, total_possible = np.array(np.sum(temp > 0, axis=-1)), temp.shape[1]
+	return total_reads, total_possible
+	
 # generate feats for cell and bin nodes
 def generate_feats(smooth_flag=False):
 	print ("generating node attributes")
@@ -384,19 +398,39 @@ def generate_feats(smooth_flag=False):
 
 		chrom2adj[c] = temp
 		total_chrom_size += list(temp.shape)[-1]
-		total_linear_chrom_size += math.sqrt(list(temp.shape)[-1])
+		total_linear_chrom_size += int(math.sqrt(list(temp.shape)[-1]) * res_cell / 1000000)
 
 	if len(chrom_list) > 1:
-		total_embed_size = min(max(int(temp.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)), int(temp.shape[0] * 1.2))
+		total_embed_size = min(max(int(temp.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)), int(temp.shape[0] * 1.3))
 	else:
 		total_embed_size = int(np.min(temp.shape) * 0.2)
-
+	print ("total_feats_size", total_embed_size)
+	p_list = []
+	
+	# if "batch_id" in config:
+	# 	print ("Correcting batch effect 1st round")
+	#
+		
 	for c in chrom_list:
 		temp = chrom2adj[c]
-		pool.submit(generate_feats_one, temp, temp, total_embed_size, total_chrom_size, c)
-	pool.shutdown(wait=True)
+		p_list.append(pool.submit(generate_feats_one, temp, temp, total_embed_size, total_chrom_size, c))
 
 	
+	
+	total_reads, total_possible = 0, 0
+	for c in chrom_list:
+		if res_cell == 1000000:
+			temp = np.load(os.path.join(temp_dir, "%s_cell_%s.npy" % (c, ext_str)), allow_pickle=True).item()
+		else:
+			temp = np.load(os.path.join(temp_dir, "%s_sparsity_metric_adj.npy" % (c)), allow_pickle=True).item()
+		a, b = check_sparsity(temp)
+		total_reads += a.reshape((-1))
+		total_possible += float(b)
+	total_sparsity = total_reads / total_possible
+	# print ("sparsity", total_sparsity.shape, total_sparsity, np.median(total_sparsity))
+	pool.shutdown(wait=True)
+
+	np.save(os.path.join(temp_dir, "sparsity.npy"), np.array([total_sparsity]))
 	
 def process_signal_one(chrom):
 	cmd = ["python", "Coassay_pretrain.py", args.config, chrom]

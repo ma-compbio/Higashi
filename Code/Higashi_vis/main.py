@@ -15,7 +15,8 @@ from sklearn.metrics import pairwise_distances
 from sklearn.preprocessing import StandardScaler
 from functools import partial
 
-
+from scipy.stats import gaussian_kde
+from sklearn.neighbors import KernelDensity
 from bokeh.layouts import row, column
 from bokeh.plotting import curdoc, figure, ColumnDataSource
 from bokeh.models.widgets import Slider, Select, Button, Div, PreText, Toggle
@@ -37,6 +38,14 @@ import json
 import pickle
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from cachetools import LRUCache
+import cmocean
+
+def rankmatch(from_mtx, to_mtx):
+	temp = np.sort(to_mtx.reshape((-1)))
+	temp2 = from_mtx.reshape((-1))
+	order = np.argsort(temp2)
+	temp2[order] = temp
+	return temp2.reshape((len(from_mtx), -1))+temp2.reshape((len(from_mtx), -1)).T
 
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
@@ -48,6 +57,7 @@ def create_mask(k=30):
 	msg_list.append("%s - First heatmap on this chromosome, indexing" % timestr)
 	format_message()
 	final = np.array(np.sum(origin_sparse, axis=0).todense())
+	
 	size = origin_sparse[0].shape[-1]
 	a = np.zeros((size, size))
 	if k > 0:
@@ -70,14 +80,19 @@ def create_mask(k=30):
 			a[:, s:e] = 1
 	a[gap, :] = 1
 	a[:, gap] = 1
-		
-	return a
+	
+	matrix = final
+	coverage = (np.sqrt(np.sum(matrix, axis=-1)) + 1e-15)
+	matrix = matrix / coverage.reshape((-1, 1))
+	matrix = matrix / coverage.reshape((1, -1))
+	final = matrix
+	return a, matrix
 
 
-def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False):
+def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 	global mask
 	# figure_size = 4 * len(matrix) / 250
-	fig = plt.figure(figsize=(5, 5))
+	fig = plt.figure(figsize=(8, 8))
 	if not cbar:
 		plt.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
 	
@@ -90,30 +105,38 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False):
 		matrix = matrix / coverage.reshape((-1, 1))
 		matrix = matrix / coverage.reshape((1, -1))
 	
-	print (matrix.shape)
 	matrix = matrix[matrix_start_slider_y.value:matrix_end_slider_y.value,
 	         matrix_start_slider_x.value:matrix_end_slider_x.value]
 	
-	print(matrix.shape)
 	
 
-	matrix *= (np.ones_like(matrix) - mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
+	matrix *= (1 - mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
 	         matrix_start_slider_x.value:matrix_end_slider_x.value])
+	mask1 = mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
+	        matrix_start_slider_x.value:matrix_end_slider_x.value].astype('bool')
+	
+	matrix = matrix[::-1,:]
+	mask1 = mask1[::-1, :]
+
 	if quantile_button.active:
-		mask1 = matrix == 0
 		matrix[~mask1] = QuantileTransformer(n_quantiles=1000, output_distribution='normal').fit_transform(
 			matrix[~mask1].reshape((-1, 1))).reshape((-1))
-		if darkmode_button.active:
-			cmap="viridis"
-		else:
-			cmap = "Reds"
+		if cmap is None:
+			if darkmode_button.active:
+				cmap="viridis"
+			else:
+				cmap = "Reds"
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=-vmin_vmax_slider.value, vmax=vmin_vmax_slider.value)
 	else:
-		cmap = "Reds"
-		value = np.sort(matrix[matrix != 0])
-		vmin, vmax = value[int(0.1*len(value))], value[int(0.9*len(value))]
+		if cmap is None:
+			if darkmode_button.active:
+				cmap="viridis"
+			else:
+				cmap = "Reds"
 		
-		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=(matrix == 0), cbar=cbar, vmin=vmin, vmax=vmax)
+		vmin, vmax = np.quantile(matrix[matrix>0], 0.1), np.quantile(matrix[matrix>0], 0.9)
+		
+		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
 		ax.set_facecolor('#20262B')
 	ax.get_xaxis().set_visible(False)
@@ -144,7 +167,6 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False):
 		# imageBox = (0, min(non_empty_rows), width, int(np.max(non_empty_rows)))
 		# im1 = im1.crop(imageBox)
 		img = np.asarray(im1)
-		print (img.shape)
 		
 	img = img.view(dtype=np.uint32).reshape((img.shape[0], -1))
 	plt.close(fig)
@@ -171,13 +193,14 @@ def async_heatmap11(selected, id):
 		else:
 			b = origin_sparse[selected[0]]
 			b = np.array(b.todense())
-		img = plot_heatmap_RdBu_tad(b)
+		# print (np.sum(b>0), b.shape)
+		# img = plot_heatmap_RdBu_tad(b, cmap="Reds")
 	except Exception as e:
 		print (e)
-		msg_list.append("original wrong")
-		img = white_img
-		
-	return img, id
+		# msg_list.append("original wrong")
+		# img = white_img
+		b = 0
+	return b, id
 
 
 def async_heatmap12(selected, id):
@@ -197,13 +220,15 @@ def async_heatmap12(selected, id):
 				p += proba
 			b[xs, ys] += p
 		b = b + b.T
-		img = plot_heatmap_RdBu_tad(b)
+		np.fill_diagonal(b, 1.0)
+		# img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		print("error", e)
 		msg_list.append("random_walk wrong")
-		img = white_img
-	return img, id
+		# img = white_img
+		b = 0
+	return b, id
 
 
 def async_heatmap21(selected, id):
@@ -237,7 +262,7 @@ def async_heatmap21(selected, id):
 
 def async_heatmap22(selected, id):
 	try:
-		global config, origin_sparse
+		global config, origin_sparse, bulk, mask
 		temp_dir = config['temp_dir']
 		embedding_name = config['embedding_name']
 		if len(selected) == 0:
@@ -256,17 +281,21 @@ def async_heatmap22(selected, id):
 				p += proba
 			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
-		img = plot_heatmap_RdBu_tad(b)
+		
+		b *= (1 - mask)
+		b = rankmatch(b, bulk)
+		# img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		msg_list.append("sc impute wrong")
-		img = white_img
-	return img, id
+		# img = white_img
+		b = 0
+	return b, id
 
 
 def async_heatmap31(selected, id):
 	try:
-		global config, origin_sparse
+		global config, origin_sparse, bulk, mask
 		temp_dir = config['temp_dir']
 		embedding_name = config['embedding_name']
 		neighbor_num = config['neighbor_num']
@@ -275,7 +304,7 @@ def async_heatmap31(selected, id):
 		size = origin_sparse[0].shape[0]
 		
 		b = np.zeros((size, size))
-		temp = np.zeros_like(b)
+		
 		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom_selector.value, embedding_name, neighbor_num)),
 	                      "r") as f:
 			coordinates = f['coordinates']
@@ -287,16 +316,21 @@ def async_heatmap31(selected, id):
 				p += proba
 			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
-		img = plot_heatmap_RdBu_tad(b)
+		
+		b *= (1 - mask)
+		b = rankmatch(b, bulk)
+		np.fill_diagonal(b, np.max(b))
+		# img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		msg_list.append("neighbor wrong")
-		img = white_img
-	return img, id
+		# img = white_img
+		b = 0
+	return b, id
 
 
 async def async_heatmap_all(selected):
-	global mask, origin_sparse, render_cache
+	global mask, origin_sparse, render_cache, bulk
 	source = [heatmap11_source, heatmap12_source, heatmap22_source, heatmap31_source]
 	h_list = [heatmap11, heatmap12, heatmap22, heatmap31]
 	
@@ -315,7 +349,7 @@ async def async_heatmap_all(selected):
 	#
 	# else:
 	if len(mask) != origin_sparse[0].shape[0]:
-		mask = create_mask(k=1e5)
+		mask, bulk = create_mask(k=1e5)
 	pool = ProcessPoolExecutor(max_workers=5)
 	p_list = []
 	p_list.append(pool.submit(async_heatmap11, selected, 0))
@@ -353,10 +387,21 @@ async def async_heatmap_all(selected):
 	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
 	# img_list[id] = img
 	
-	
+	result  = {}
 	for p in as_completed(p_list):
 		img, id = p.result()
-		source[id].data['img'] = [np.asarray(img)]
+		# source[id].data['img'] = [np.asarray(img)]
+		result[id] = img
+		
+	result[3] += result[2]
+	for id in result:
+		img = result[id]
+		
+		if type(img) is not int:
+			source[id].data['img'] = [np.asarray(plot_heatmap_RdBu_tad(img))]
+		else:
+			source[id].data['img'] = white_img
+			
 		h_list[id].title.text = h_list[id].title.text.split(":")[0]
 		img_list[id] = img
 	if key_name != "nostore":
@@ -435,6 +480,13 @@ def update(attr, old, new):
 			
 		elif len(new)  == 1:
 			# new = int(new)
+			if int(local_selection_slider.value) > 1:
+				v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+				distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
+				# print (distance, distance.shape)
+				new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
+				# print (new)
+				
 			update_heatmap(new)
 			update_scatter(new)
 		else:
@@ -459,6 +511,13 @@ def update(attr, old, new):
 
 	elif type(new) == int:
 		selected = [new]
+		if int(local_selection_slider.value) > 1:
+			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+			distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
+			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
+			print(new)
+			
+			selected = list(new)
 		update_scatter(selected)
 		update_heatmap(selected)
 	
@@ -500,7 +559,7 @@ def float_color_update(s):
 	source.data['label_info'] = s
 	
 	
-	mapper = linear_cmap('color', palette=pal, low=np.min(s), high=np.max(s))
+	mapper = linear_cmap('color', palette=pal, low=np.quantile(s, 0.1), high=np.quantile(s, 0.9))
 	try:
 		r.selection_glyph.fill_color=mapper
 	except:
@@ -574,16 +633,34 @@ def color_update(attr, old, new):
 	categorical_info.title.text = "%s bar plot" % new
 	continuous_info.title.text = "%s histogram" % new
 	
-	if new == "Random":
-		s = np.sum(v,axis=-1) + np.random.random(cell_num)
-		float_color_update(s)
-		
-		
-		
-	elif new == "None":
+	if new == "None":
 		s = ['cell'] * cell_num
 		str_color_update(s)
-
+	elif new == "kde":
+		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+		# print (v)
+		model1 = gaussian_kde(v.T)
+		model1 = gaussian_kde(v.T, bw_method=model1.factor/2)
+		s = model1(v.T).reshape((-1))
+		
+		float_color_update(np.log(s))
+	elif new == "kde_ratio":
+		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+		# print (v)
+		model1 = gaussian_kde(v.T)
+		model2 = gaussian_kde(v.T, bw_method=model1.factor*2)
+		model1 = gaussian_kde(v.T, bw_method=model1.factor/2)
+		s = model1(v.T).reshape((-1))
+		s2 = model2(v.T).reshape((-1))
+		# kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(v)
+		# s = kde.score_samples(v)
+		# kde = KernelDensity(kernel='gaussian', bandwidth=1).fit(v)
+		# s2 = kde.score_samples(v)
+		float_color_update(np.log(s)-np.log(s2))
+	elif new == 'read_count':
+		global origin_sparse
+		s = np.array([a.sum() for a in origin_sparse])
+		float_color_update(np.log(s))
 	else:
 		s = np.array(color_scheme[new])
 		if s.dtype == 'int':
@@ -606,14 +683,18 @@ def data_update(attr, old, new):
 	print ("data_update")
 	global config
 	embed_vis.title.text = "Loading... Please wait"
-	print (config['impute_list'])
-	chrom_selector.options = config['impute_list']
-	color_selector.value = "None"
+	
+	r.data_source.selected.indices = []
+	
 	initialize(name2config[new], correct_color=True)
+	print(config['impute_list'])
+	chrom_selector.options = config['impute_list']
+	chrom_selector.value = config['impute_list'][0]
+	color_selector.value = "None"
 	
 	global origin_sparse
 	temp_dir = config['temp_dir']
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_selector.value), allow_pickle=True)
+	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % config['impute_list'][0]), allow_pickle=True)
 	categorical_h_all.data_source.selected.indices = []
 	matrix_start_slider_x.value=0
 	matrix_start_slider_x.end = origin_sparse[0].shape[-1]
@@ -625,7 +706,8 @@ def data_update(attr, old, new):
 	matrix_end_slider_y.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.end = origin_sparse[0].shape[-1]
-
+	local_selection_slider.end = origin_sparse[0].shape[-1]
+	
 def reload_update(button):
 	embed_vis.title.text = "Loading... Please wait"
 	initialize(name2config[data_selector.value], correct_color=True)
@@ -639,14 +721,17 @@ def reduction_update(attr, old, new):
 	
 def widget_update():
 	cell_slider.end=cell_num
-	color_selector.options = ["None"] + list(color_scheme.keys())
+	color_selector.options = ["None", "kde", "kde_ratio", "read_count"] + list(color_scheme.keys())
 
 
 async def calculate_and_update(v, neighbor_num, correct_color):
 	global neighbor_info, source, config
 	
+	
 	distance = pairwise_distances(v, metric='euclidean')
-	distance /= np.mean(distance)
+	distance_sorted = np.sort(distance, axis=-1)
+	distance /= np.quantile(distance_sorted[:, 1:neighbor_num].reshape((-1)), q=0.5)
+	
 	if dim_reduction_selector.value == "PCA":
 		
 		v = PCA(n_components=3).fit_transform(v)
@@ -663,9 +748,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 			params = dict(config['UMAP_params'])
 			for key in params:
 				setattr(model, key, params[key])
-		print (v)
 		v = model.fit_transform(v)
-		print (v)
 		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - UMAP finished" % timestr)
@@ -674,7 +757,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		# v = TSNE(n_components=3, n_jobs=30).fit(v)
 		# v = PCA(v.shape[-1]).fit_transform(v)
 		# v = StandardScaler().fit_transform(v)
-		model = TSNE(n_components=2, perplexity=50, n_jobs=-1)
+		model = TSNE(n_components=2, n_jobs=-1, init='pca')
 		if "TSNE_params" in config:
 			params = config['TSNE_params']
 			for key in params:
@@ -691,10 +774,8 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	# 	d = distance[i]
 	# 	neighbor = get_neighbor(d, neighbor_num)
 	# 	neighbor_info.append(neighbor)
-	neighbor_all = np.argsort(distance, axis=-1)[:, :neighbor_num]
-	for i in trange(len(neighbor_all)):
-		nb = neighbor_all[i]
-		neighbor_info.append(nb[distance[i, nb] < 1.0])
+	neighbor_info = np.argsort(distance, axis=-1)[:, :neighbor_num]
+	
 	
 	data = dict(x=x, y=y, color=["#3c84b1"] * len(x), legend_info=['cell'] * len(x),
 				label_info=np.array(['cell'] * len(x)))
@@ -714,8 +795,8 @@ def initialize(config_name, correct_color=False):
 	temp_dir = config['temp_dir']
 	data_dir = config['data_dir']
 	embedding_name = config['embedding_name']
-	neighbor_num = config['neighbor_num']
-	heatmap31.title="k=%d" % neighbor_num-1
+	neighbor_num = int(config['neighbor_num'])
+	heatmap31.title.text = "Higashi(%d)"  % (neighbor_num-1)
 	color_scheme = {}
 	with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
 		color_scheme = pickle.load(f)
@@ -803,9 +884,28 @@ def plot_distance_update(attr, old, new):
 
 
 def anything_that_updates_heatmap(attr, old, new):
+	if len(r.data_source.selected.indices) == 1:
+		new = r.data_source.selected.indices
+		if int(local_selection_slider.value) > 1:
+			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
+			# print (distance, distance.shape)
+			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
+			update_heatmap(new)
+			return
+		
 	update_heatmap(r.data_source.selected.indices)
 
 def anything_that_updates_heatmap_button(button):
+	if len(r.data_source.selected.indices) == 1:
+		new = r.data_source.selected.indices
+		if int(local_selection_slider.value) > 1:
+			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
+			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
+			# print (distance, distance.shape)
+			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
+			update_heatmap(new)
+			return
 	update_heatmap(r.data_source.selected.indices)
 
 def axis_update(attr, old, new):
@@ -854,6 +954,41 @@ x_selector = Select(title="x-axis", value="1", options=["1","2","3"], width=150)
 y_selector = Select(title="y-axis", value="2", options=["1","2","3"], width=150)
 
 
+# create the heatmap visualization
+heatmap11 = figure(toolbar_location="above",tools="pan, wheel_zoom, reset, save", plot_width=300, plot_height=300,
+				 min_border=5,output_backend="webgl", title='raw', active_scroll = "wheel_zoom")
+heatmap12 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300,x_range=heatmap11.x_range, y_range=heatmap11.y_range,
+				 min_border=5,output_backend="webgl", title='conv-rwr', active_scroll = "wheel_zoom")
+
+# heatmap21 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
+# 				 min_border=5,output_backend="webgl", title='Higashi(i)nfinity', active_scroll = "wheel_zoom")
+
+heatmap22 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
+				 min_border=5,output_backend="webgl", title='Higashi(0)', active_scroll = "wheel_zoom")
+
+heatmap31 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
+				 min_border=5,output_backend="webgl", title='Higashi(4)', active_scroll = "wheel_zoom")
+
+for h in [heatmap11, heatmap12, heatmap22, heatmap31]:
+	h.xgrid.visible = False
+	h.ygrid.visible = False
+	h.xaxis.visible = False
+	h.yaxis.visible =False
+
+white = np.ones((20,20,4), dtype='int8') * 255
+white_img = white.view(dtype=np.uint32).reshape((white.shape[0], -1))
+heatmap11_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+heatmap12_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+# heatmap21_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+heatmap22_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+heatmap31_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
+h1 = heatmap11.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap11_source)
+h2 = heatmap12.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap12_source)
+# h3 = heatmap21.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap21_source)
+h4 = heatmap22.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap22_source)
+h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap31_source)
+
+
 initialize(config_dir[0], True)
 
 color_selector = Select(title='color scheme', value="None", options=["None", "Random"]+list(color_scheme.keys()), width=150)
@@ -888,15 +1023,17 @@ origin_sparse = np.load(os.path.join(temp_dir, "chr1_sparse_adj.npy"), allow_pic
 
 
 plot_distance_selector = Slider(title='Heatmap distance', value=origin_sparse[0].shape[-1], start=1, end=origin_sparse[0].shape[-1], step=1, width=150, value_throttled=2000)
+local_selection_slider = Slider(title='Local selection number', value=1, start=1, end=origin_sparse[0].shape[-1], step=1, width=150, value_throttled=2000)
 rotation_button = Toggle(label="Rotate heatmap", button_type="primary", width=150)
 rotation_button.on_click(anything_that_updates_heatmap_button)
 
 tad_button = Toggle(label="Display TADs", button_type="primary", width=150)
-quantile_button = Toggle(label="Quantile_norm", button_type='primary', width=150, active=True)
-VC_button = Toggle(label="VC_SQRT", button_type='primary', width=150, active=True)
+quantile_button = Toggle(label="Quantile_norm", button_type='primary', width=150, active=False)
+VC_button = Toggle(label="VC_SQRT", button_type='primary', width=150, active=False)
 
 
-pal = sns.color_palette('RdBu_r', 256)
+
+pal = sns.color_palette('RdBu_r', 32)
 pal = pal.as_hex()
 TOOLS="pan,wheel_zoom,tap,box_select,lasso_select,reset, save"
 
@@ -949,39 +1086,6 @@ matrix_start_slider_y = Slider(title="Heatmap start: y", value=0, start=0, end=o
 matrix_end_slider_y = Slider(title="Heatmap end: y", value=origin_sparse[0].shape[-1], start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
 vmin_vmax_slider = Slider(title='Vmin/Vmax(-/+)', value=1.5, start=0.1,end=4.0, step=0.1, value_throttled=2000, width=150)
 
-# create the heatmap visualization
-heatmap11 = figure(toolbar_location="above",tools="pan, wheel_zoom, reset, save", plot_width=300, plot_height=300,
-				 min_border=5,output_backend="webgl", title='raw', active_scroll = "wheel_zoom")
-heatmap12 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300,x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-				 min_border=5,output_backend="webgl", title='conv-rwr', active_scroll = "wheel_zoom")
-
-# heatmap21 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-# 				 min_border=5,output_backend="webgl", title='k=infinity', active_scroll = "wheel_zoom")
-
-heatmap22 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-				 min_border=5,output_backend="webgl", title='k=0', active_scroll = "wheel_zoom")
-
-heatmap31 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-				 min_border=5,output_backend="webgl", title='k=4', active_scroll = "wheel_zoom")
-
-for h in [heatmap11, heatmap12, heatmap22, heatmap31]:
-	h.xgrid.visible = False
-	h.ygrid.visible = False
-	h.xaxis.visible = False
-	h.yaxis.visible =False
-
-white = np.ones((20,20,4), dtype='int8') * 255
-white_img = white.view(dtype=np.uint32).reshape((white.shape[0], -1))
-heatmap11_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-heatmap12_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-# heatmap21_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-heatmap22_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-heatmap31_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-h1 = heatmap11.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap11_source)
-h2 = heatmap12.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap12_source)
-# h3 = heatmap21.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap21_source)
-h4 = heatmap22.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap22_source)
-h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap31_source)
 
 
 info_log = Div(text="", width = 300, height = 300, height_policy="fixed",
@@ -1018,7 +1122,7 @@ def change_theme(button):
 		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, x_selector, y_selector]:
 			selector.css_classes = ['custom_select']
 		
-		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector ]:
+		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector, local_selection_slider]:
 			slider.css_classes = ['custom_slider']
 		categorical_h_all.data_source.data['fill_color'] = ["#1A1C1D"] * len(categorical_h_all.data_source.data['x'])
 		continuous_h_all.data_source.data['fill_color'] = ["#1A1C1D"] * len(continuous_h_all.data_source.data['x'])
@@ -1027,7 +1131,7 @@ def change_theme(button):
 		blackorwhite = "white"
 		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, x_selector, y_selector]:
 			selector.css_classes = []
-		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector]:
+		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector, local_selection_slider]:
 			slider.css_classes = []
 		categorical_h_all.data_source.data['fill_color'] = ["white"] * len(categorical_h_all.data_source.data['x'])
 		continuous_h_all.data_source.data['fill_color'] = ["white"] * len(continuous_h_all.data_source.data['x'])
@@ -1065,10 +1169,10 @@ layout= column(row(
 				row(data_selector, chrom_selector),
 				row(dim_reduction_selector, color_selector),
 				row(x_selector, y_selector),
-				row(size_selector, vmin_vmax_slider),
+				row(size_selector, local_selection_slider),
 				row(matrix_start_slider_x, matrix_end_slider_x),
 				row(matrix_start_slider_y, matrix_end_slider_y),
-				row(plot_distance_selector),
+				row(plot_distance_selector, vmin_vmax_slider),
 				row(quantile_button, VC_button),
 				cell_slider,
 				categorical_info,

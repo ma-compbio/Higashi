@@ -11,6 +11,7 @@ import argparse
 import resource
 
 from sklearn.preprocessing import KBinsDiscretizer, StandardScaler, MinMaxScaler
+from sklearn.linear_model import LinearRegression
 import pickle
 import subprocess
 
@@ -71,11 +72,12 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_ch
 		# main_loss = torch.mean(torch.clamp(- diff * label + margin, min=0.0))
 		main_loss = loss_func(diff, label)
 		
-		# if not use_recon:
-		# 	if neg_num > 0:
-		# 		mask_w_eq_zero = w == 0
-		# 		makeitzero = F.mse_loss(w[mask_w_eq_zero], pred[mask_w_eq_zero])
-		# 		mse_loss += makeitzero
+		if not use_recon:
+			if neg_num > 0:
+				mask_w_eq_zero = w == 0
+				makeitzero = F.mse_loss(w[mask_w_eq_zero], pred[mask_w_eq_zero])
+				mse_loss += makeitzero
+				
 	elif mode == 'regression':
 		label = w
 		main_loss =  F.mse_loss(pred, w)
@@ -135,7 +137,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 			for opt in optimizer_list:
 				opt.zero_grad()
 			loss_bce.backward(retain_graph=True)
-			
+			# print (node_embedding_init.wstack[0].weight_list[0].grad)
 			main_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
 			
 			if use_recon:
@@ -145,19 +147,24 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 
 				recon_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
 				ratio = beta * main_norm / recon_norm
-				ratio = max(ratio, 1.0)
-				contractive_loss = 0.0
-				for i in range(len(node_embedding_init.wstack[0].weight_list)):
-					contractive_loss += torch.sum(node_embedding_init.wstack[0].weight_list[i] ** 2) + \
-					                    torch.sum(node_embedding_init.wstack[0].reverse_weight_list[i] ** 2)
+				ratio1 = max(ratio, 100 * np.median(total_sparsity_cell) - 8)
+				
+				if contractive_flag:
+					contractive_loss = 0.0
+					for i in range(len(node_embedding_init.wstack[0].weight_list)):
+						contractive_loss += torch.sum(node_embedding_init.wstack[0].weight_list[i] ** 2)
+						contractive_loss += torch.sum(node_embedding_init.wstack[0].reverse_weight_list[i] ** 2)
+				else:
+					contractive_loss = 0.0
 					
 			else:
 				contractive_loss = 0.0
 				ratio = 0.0
+				ratio1 = 0.0
 			
 			
 			
-			train_loss = alpha * loss_bce + ratio * loss_mse + 1e-3 * contractive_loss
+			train_loss = alpha * loss_bce + ratio1 * loss_mse + contractive_loss_weight * contractive_loss
 			
 			for opt in optimizer_list:
 				opt.zero_grad()
@@ -350,7 +357,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 		for c, cell_id, bin_id in zip(nodes_chrom, cell_ids, bin_ids):
 			if weighted_adj:
 				row = 0
-				for nbr_cell in cell_neighbor_list_inverse[cell_id]:
+				for nbr_cell in cell_neighbor_list[cell_id]:
 					balance_weight = weight_dict[(nbr_cell, cell_id)]
 					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
 			else:
@@ -497,7 +504,21 @@ def save_embeddings(model):
 	torch.cuda.empty_cache()
 	return embeddings
 
+def remove_BE_linear(temp1):
+	if "batch_id" in config:
+		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
+		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
+		for i, u in enumerate(np.unique(batch_id_info)):
+			new_batch_id_info[batch_id_info == u, i] = 1
+		
+		batch_id_info = np.array(new_batch_id_info)
+		
+		residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+		
+		temp1 = residual
 
+	return temp1
+		
 def generate_attributes():
 	embeddings = []
 	targets = []
@@ -505,11 +526,20 @@ def generate_attributes():
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
+		# a = StandardScaler().fit_transform(a)
 		# a = StandardScaler().fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
-	pca_after = np.concatenate(pca_after, axis=-1).astype('float32')
-	pca_after = StandardScaler().fit_transform(pca_after.reshape((-1, 1))).reshape((len(a), -1))
+	pca_after = np.concatenate(pca_after, axis=-1)
+	
+	# pca_after = StandardScaler().fit_transform(pca_after)
+	# pca_after = remove_BE_linear(pca_after)
+	# pca_after = StandardScaler().fit_transform(pca_after.reshape((-1, 1))).reshape((len(pca_after), -1))
+	#
+	# test = PCA(n_components=32).fit_transform(pca_after)
+	# from umap import UMAP
+	# test = UMAP(n_components=2, n_neighbors=30, min_dist=0.3).fit_transform(test)
+	# np.save("../pca_after_umap.npy", test)
 	if coassay:
 		print ("coassay")
 		cell_attributes = np.load(os.path.join(temp_dir, "pretrain_coassay.npy")).astype('float32')
@@ -517,10 +547,18 @@ def generate_attributes():
 		# cell_targets = StandardScaler().fit_transform(cell_targets)
 		# cell_attributes = StandardScaler().fit_transform(cell_attributes)
 		targets.append(cell_attributes)
-		embeddings.append(cell_attributes)
-	else:
+		pca_after = StandardScaler().fit_transform(pca_after)
 		embeddings.append(pca_after)
-		targets.append(pca_after)
+	else:
+		print (pca_after)
+		pca_after1 = remove_BE_linear(pca_after)
+		pca_after1 = StandardScaler().fit_transform(pca_after1.reshape((-1, 1))).reshape((len(pca_after), -1))
+		pca_after2 = StandardScaler().fit_transform(pca_after)
+		pca_after2 = remove_BE_linear(pca_after2)
+		pca_after2 = StandardScaler().fit_transform(pca_after2.reshape((-1, 1))).reshape((len(pca_after2), -1))
+		targets.append(pca_after2.astype('float32'))
+		embeddings.append(pca_after1.astype('float32'))
+		
 
 
 	
@@ -613,7 +651,7 @@ def linkhdf5(name, cell_id_splits):
 				for cell in tqdm(ids):
 					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
 		f.close()
-	for chrom in chrom_list:
+	for chrom in impute_list:
 		for i in range(len(cell_id_splits)):
 			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 if __name__ == '__main__':
@@ -736,9 +774,19 @@ if __name__ == '__main__':
 	print(total_possible)
 	total_possible *= cell_num
 	sparsity = len(data) / total_possible
-	print("sparsity", sparsity, len(data), total_possible)
 	
 	
+	# cell_read_count = np.median(np.load(os.path.join(temp_dir, "cell_read_count.npy")))
+	total_sparsity_cell = np.load(os.path.join(temp_dir, "sparsity.npy"))
+	if np.median(total_sparsity_cell) >= 0.05:
+		contractive_flag = True
+		contractive_loss_weight = 1e-3
+	else:
+		contractive_flag = False
+		contractive_loss_weight = 0.0
+	
+		
+	print("sparsity", sparsity, np.median(total_sparsity_cell), contractive_loss_weight)
 	neighbor_mask = get_neighbor_mask()
 	
 	if sparsity > 0.35:
@@ -756,6 +804,7 @@ if __name__ == '__main__':
 	batch_size *= (1 + neg_num)
 	
 	print("weight", weight, np.min(weight), np.max(weight))
+	weight += 1
 	# if mode == 'rank':
 	# 	weight = KBinsDiscretizer(n_bins=50, encode='ordinal', strategy='quantile').fit_transform(
 	# 		weight.reshape((-1, 1))).reshape((-1)) + 2
@@ -791,10 +840,13 @@ if __name__ == '__main__':
 	print(train_data, test_data)
 	
 	cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
-	if "batch_id" in config:
+	if "batch_id" in config or "library_id" in config:
 		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
 		# print (label_info)
-		label = np.array(label_info[config["batch_id"]])
+		if "batch_id" in config:
+			label = np.array(label_info[config["batch_id"]])
+		else:
+			label = np.array(label_info[config["library_id"]])
 		uniques = np.unique(label)
 		target2int = np.zeros((len(label), len(uniques)), dtype='float32')
 		
@@ -832,7 +884,7 @@ if __name__ == '__main__':
 		dimensions,
 		False,
 		num_list, targets_initial).to(device)
-	node_embedding_init.wstack[0].fit(embeddings_initial[0], 1, sparse=False, targets=torch.from_numpy(targets_initial[0]).float().to(device), batch_size=1024)
+	node_embedding_init.wstack[0].fit(embeddings_initial[0], 300, sparse=False, targets=torch.from_numpy(targets_initial[0]).float().to(device), batch_size=1024)
 	
 	
 	higashi_model = Hyper_SAGNN(
@@ -852,7 +904,7 @@ if __name__ == '__main__':
 	# for name, param in higashi_model.named_parameters():
 	# 	print(name, param.requires_grad, param.shape)
 	
-	optimizer = torch.optim.Adam(higashi_model.parameters(),
+	optimizer = torch.optim.Adam(list(higashi_model.parameters()) + list(node_embedding_init.parameters()),
 								  lr=1e-3)
 	
 	
@@ -894,7 +946,7 @@ if __name__ == '__main__':
 			  loss=loss,
 			  training_data_generator=training_data_generator,
 			  validation_data_generator=validation_data_generator,
-			  optimizer=[optimizer], epochs=100, batch_size=batch_size,
+			  optimizer=[optimizer], epochs=60, batch_size=batch_size,
 			  load_first=False, save_embed=True)
 		
 		# raise KeyboardInterrupt
@@ -940,11 +992,11 @@ if __name__ == '__main__':
 				'model_link': higashi_model.state_dict()}
 
 		torch.save(checkpoint, save_path + "_stage2")
-	
+
 	# Loading Stage 2
 	checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
 	higashi_model.load_state_dict(checkpoint['model_link'])
-	
+
 	if training_stage <= 2:
 		# Impute Stage 2
 		if non_para_impute:
@@ -957,7 +1009,7 @@ if __name__ == '__main__':
 			for i in range(gpu_num-1):
 				impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
 				time.sleep(60)
-	
+
 	train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 	valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
 
@@ -971,21 +1023,17 @@ if __name__ == '__main__':
 	# Training Stage 3
 	print ("getting cell nbr's nbr list")
 	cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
-	cell_neighbor_list_inverse = [[] for i in range(num[0] + 1)]
-	for i, cell_nbr in enumerate(cell_neighbor_list):
-		for c in cell_nbr:
-			cell_neighbor_list_inverse[c].append(i)
 
 	weight_dict = {}
 
 	for i in trange(len(cell_neighbor_list)):
 		for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
-			weight_dict[(i, c)] = w
+			weight_dict[(c, i)] = w
 	weighted_adj = True
 
 
-	
-	np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list_inverse, weight_dict]), allow_pickle=True)
+
+	np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list, weight_dict]), allow_pickle=True)
 	# node_embedding2.off_hook()
 	# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,
 	#                                                 feature_dim=dimensions,
@@ -1017,7 +1065,7 @@ if __name__ == '__main__':
 	node_embedding_init.off_hook()
 
 	del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight, training_data_generator, validation_data_generator
-	del sparse_chrom_list, weight_dict, cell_neighbor_list_inverse
+	del sparse_chrom_list, weight_dict
 	# Impute Stage 3
 	if non_para_impute:
 		impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
@@ -1033,6 +1081,6 @@ if __name__ == '__main__':
 		impute_pool.shutdown(wait=True)
 		linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all)
 		cell_id_all = np.arange(num[0])
-		
+
 		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
 		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all)
