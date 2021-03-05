@@ -34,7 +34,7 @@ class Wrap_Embedding(torch.nn.Embedding):
 class SparseEmbedding(nn.Module):
 	def __init__(self, embedding_weight, sparse=False, cpu=False):
 		super().__init__()
-		print("Initializing embedding, shape", embedding_weight.shape)
+		# print("Initializing embedding, shape", embedding_weight.shape)
 		self.sparse = sparse
 		self.cpu = cpu
 		

@@ -184,11 +184,9 @@ def rank_match_hdf5(name, temp_dir, chrom_list):
 		
 		for id_ in f.keys():
 			if "cell" in id_:
-				# print (f2[id_])
 				data = f[id_]
 				v = np.array(f[id_])
 				order = np.argsort(v)
-				v[order] = np.srt(values)
+				v[order] = np.sort(values)
 				data[...] = v
-		# print(f2[id_])
 		f.close()

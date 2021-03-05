@@ -137,7 +137,6 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 			for opt in optimizer_list:
 				opt.zero_grad()
 			loss_bce.backward(retain_graph=True)
-			# print (node_embedding_init.wstack[0].weight_list[0].grad)
 			main_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
 			
 			if use_recon:
@@ -230,16 +229,12 @@ def eval_epoch(model, loss_func, validation_data_generator):
 
 def check_nonzero(x, c):
 	# minus 1 because add padding index
-	# print(2, sparse_chrom_list[c][x[0]-1])
-	# print (3, sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c+1], x[2]-1-chrom_start_end[c, 0]])
 	if len(neighbor_mask) > 1:
 		dim = sparse_chrom_list[c][x[0]-1].shape[-1]
 		return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
 	else:
 		return sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
-		# print("simple", x, start_end_dict[int(x[1])], num_list)
-		# print (c, sparse_chrom_list[c][x[0] - 1].shape, num_list[c], x[1] - 1 - num_list[c], x[2] - 1 - num_list[c])
-		# raise EOFError
+	
 def generate_negative_cpu(x, x_chrom, forward=True):
 	global pair_ratio
 	rg = np.random.default_rng()
@@ -286,7 +281,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 							int(start), int(end), 1) + 1
 					else:
 						temp[change] = rg.choice(end - start) + start + 1
-					# print ("hard")
+					
 				else:
 					start, end = start_end_dict[int(temp[0])]
 					temp[0] = rg.choice(end - start) + start + 1
@@ -550,7 +545,7 @@ def generate_attributes():
 		pca_after = StandardScaler().fit_transform(pca_after)
 		embeddings.append(pca_after)
 	else:
-		print (pca_after)
+		# print (pca_after)
 		pca_after1 = remove_BE_linear(pca_after)
 		pca_after1 = StandardScaler().fit_transform(pca_after1.reshape((-1, 1))).reshape((len(pca_after), -1))
 		pca_after2 = StandardScaler().fit_transform(pca_after)
@@ -644,7 +639,6 @@ def linkhdf5(name, cell_id_splits):
 		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
 		for i, ids in enumerate(cell_id_splits):
 			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
-				print (input_f.keys())
 				if i == 0:
 					f.create_dataset('coordinates', data=input_f['coordinates'])
 					
@@ -658,13 +652,13 @@ def linkhdf5(name, cell_id_splits):
 def modify_nbr_hdf5(name1, name2):
 	for chrom in impute_list:
 		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
-		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r+")
+		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
 		
 		for id_ in f1.keys():
 			if "cell" in id_:
-				print (f2[id_])
-				f2[id_] = f2[id_] + f1[id_]
-				print(f2[id_])
+				data1 = f2[id_]
+				v = np.array(f2[id_]) + np.array(f1[id_])
+				data1[...] = v
 		f1.close()
 		f2.close()
 	
@@ -786,7 +780,6 @@ if __name__ == '__main__':
 			for j in range(min(i + min_bin, end), min(end, i + max_bin)):
 				total_possible += 1
 	
-	print(total_possible)
 	total_possible *= cell_num
 	sparsity = len(data) / total_possible
 	
@@ -800,8 +793,7 @@ if __name__ == '__main__':
 		contractive_flag = False
 		contractive_loss_weight = 0.0
 	
-		
-	print("sparsity", sparsity, np.median(total_sparsity_cell), contractive_loss_weight)
+	
 	neighbor_mask = get_neighbor_mask()
 	
 	if sparsity > 0.35:
@@ -815,10 +807,10 @@ if __name__ == '__main__':
 	else:
 		neg_num = 5
 		
-	print("neg_num", neg_num)
+	# print("neg_num", neg_num)
 	batch_size *= (1 + neg_num)
 	
-	print("weight", weight, np.min(weight), np.max(weight))
+	# print("weight", weight, np.min(weight), np.max(weight))
 	weight += 1
 	# if mode == 'rank':
 	# 	weight = KBinsDiscretizer(n_bins=50, encode='ordinal', strategy='quantile').fit_transform(
@@ -850,9 +842,9 @@ if __name__ == '__main__':
 	start_end_dict = np.concatenate([np.zeros((1, 2)), start_end_dict], axis=0).astype('int')
 	
 	
-	print("start_end_dict", start_end_dict.shape, start_end_dict)
+	# print("start_end_dict", start_end_dict.shape, start_end_dict)
 	
-	print(train_data, test_data)
+	# print(train_data, test_data)
 	
 	cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
 	if "batch_id" in config or "library_id" in config:
@@ -869,9 +861,9 @@ if __name__ == '__main__':
 			target2int[label == t, i] = 1
 		cell_feats = np.concatenate([cell_feats, target2int], axis=-1)
 	cell_feats = np.concatenate([np.zeros((1, cell_feats.shape[-1])), cell_feats], axis=0).astype('float32')
-	print ("cell_feats", cell_feats)
+	# print ("cell_feats", cell_feats)
 	embeddings_initial, attribute_dict, targets_initial = generate_attributes()
-	print ("attribute_dict.shape", attribute_dict.shape, cell_feats.shape)
+	# print ("attribute_dict.shape", attribute_dict.shape, cell_feats.shape)
 
 	
 	
@@ -880,18 +872,11 @@ if __name__ == '__main__':
 	initial_set = set()
 	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
 	
-	print ("sparse_chrom_list.shape", sparse_chrom_list.shape)
-	print("train_weight", train_weight)
-	
 	if mode == 'classification':
 		train_weight_mean = np.mean(train_weight)
 		
 		train_weight, test_weight = transform_weight_class(train_weight, train_weight_mean, neg_num), \
 									transform_weight_class(test_weight, train_weight_mean, neg_num)
-		
-	print(train_weight, np.min(train_weight), np.max(train_weight))
-	print("train data amount", len(train_data))
-	
 	
 	# Constructing the model
 	node_embedding_init = MultipleEmbedding(
@@ -1019,7 +1004,7 @@ if __name__ == '__main__':
 		else:
 			torch.save(higashi_model, save_path + "_stage2_model")
 			cell_id_all = np.arange(num[0])
-			print (cell_id_all)
+			# print (cell_id_all)
 			cell_id_all = np.array_split(cell_id_all, gpu_num-1)
 			for i in range(gpu_num-1):
 				impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
@@ -1099,4 +1084,8 @@ if __name__ == '__main__':
 
 		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
 		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all)
+		
 	modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num))
+	# Rank match is to make sure the distribution of predicted values match real population Hi-C values.
+	rank_match_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), temp_dir, impute_list)
+	rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list)

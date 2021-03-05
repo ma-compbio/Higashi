@@ -99,7 +99,13 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 			big_samples[:, 0] = cell
 			proba = model.predict(big_samples, big_samples_chrom, verbose=False, batch_size=int(5e4),
 			                      activation=activation).reshape((-1))
-			
+			# print("close")
+			# print(proba[(big_samples[:, 1] == 5 + num_list[0] + 1) & (big_samples[:, 2] <= 20 + num_list[0])])
+			# print(np.array(sparse_chrom_list[0][cell - 1][5, :20].todense()))
+			#
+			# print ("far")
+			# print (proba[(big_samples[:, 1] == 5 + num_list[0]+1) & (big_samples[:, 2] >= 150+ num_list[0])])
+			# print (np.array(sparse_chrom_list[0][cell-1][5, 150:].todense()))
 			for chrom in impute_list:
 				slice_start, slice_end, f = chrom2info[chrom]
 				f.create_dataset("cell_%d" % (i), data=proba[slice_start:slice_end])
