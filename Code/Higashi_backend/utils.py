@@ -4,10 +4,11 @@ from tqdm import tqdm, trange
 from sklearn.metrics import average_precision_score
 from sklearn.metrics import roc_auc_score, pairwise_distances
 from concurrent.futures import as_completed, ProcessPoolExecutor
-# from pybloom_live import ScalableBloomFilter
 from copy import deepcopy
 from scipy.stats import pearsonr,spearmanr
 import json
+import os
+import h5py
 
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
@@ -162,3 +163,32 @@ def generate_binpair( start, end, min_bin_, max_bin_):
 			samples.append([bin1, bin2])
 	samples = np.array(samples) + 1
 	return samples
+
+def rankmatch(from_mtx, to_mtx):
+	temp = np.sort(to_mtx.reshape((-1)))
+	temp2 = from_mtx.reshape((-1))
+	order = np.argsort(temp2)
+	temp2[order] = temp
+	return temp2.reshape((len(from_mtx), -1))
+
+def rank_match_hdf5(name, temp_dir, chrom_list):
+	for chrom in chrom_list:
+		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
+		bulk = np.array(np.sum(origin_sparse, axis=0).todense()) / len(origin_sparse)
+		
+		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "r+")
+		coordinates = np.array(f['coordinates']).astype('int')
+		xs, ys = coordinates[:, 0], coordinates[:, 1]
+		values = bulk[xs, ys]
+		
+		
+		for id_ in f.keys():
+			if "cell" in id_:
+				# print (f2[id_])
+				data = f[id_]
+				v = np.array(f[id_])
+				order = np.argsort(v)
+				v[order] = np.srt(values)
+				data[...] = v
+		# print(f2[id_])
+		f.close()

@@ -6,12 +6,12 @@ from tqdm import tqdm, trange
 import numpy as np
 import pandas as pd
 import h5py
-# import exdir as h5py
 import seaborn as sns
 from datetime import datetime
 from sklearn.decomposition import PCA
 from umap import UMAP
 from sklearn.metrics import pairwise_distances
+
 from sklearn.preprocessing import StandardScaler
 from functools import partial
 
@@ -30,7 +30,6 @@ from sklearn.cluster import KMeans,AgglomerativeClustering
 from sklearn.metrics import adjusted_rand_score
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.manifold import TSNE
-# from openTSNE import TSNE
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from PIL import Image
@@ -40,12 +39,33 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from cachetools import LRUCache
 import cmocean
 
-def rankmatch(from_mtx, to_mtx):
-	temp = np.sort(to_mtx.reshape((-1)))
-	temp2 = from_mtx.reshape((-1))
-	order = np.argsort(temp2)
-	temp2[order] = temp
-	return temp2.reshape((len(from_mtx), -1))+temp2.reshape((len(from_mtx), -1)).T
+def kth_diag_indices(a, k):
+	rows, cols = np.diag_indices_from(a)
+	if k < 0:
+		return rows[-k:], cols[:k]
+	elif k > 0:
+		return rows[:-k], cols[k:]
+	else:
+		return rows, cols
+
+def oe(matrix, expected = None):
+	new_matrix = np.zeros_like(matrix)
+	for k in range(len(matrix)):
+		rows, cols = kth_diag_indices(matrix, k)
+		diag = np.diag(matrix,k)
+		if expected is not None:
+			expect = expected[k]
+		else:
+			expect = np.mean(diag)
+		if expect == 0:
+			new_matrix[rows, cols] = 0.0
+		else:
+			new_matrix[rows, cols] = diag / (expect)
+	new_matrix = new_matrix + new_matrix.T
+	return new_matrix
+
+def pearson(matrix):
+	return np.corrcoef(matrix)
 
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
@@ -82,16 +102,11 @@ def create_mask(k=30):
 	a[:, gap] = 1
 	
 	matrix = final
-	coverage = (np.sqrt(np.sum(matrix, axis=-1)) + 1e-15)
-	matrix = matrix / coverage.reshape((-1, 1))
-	matrix = matrix / coverage.reshape((1, -1))
-	final = matrix
 	return a, matrix
 
 
 def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 	global mask
-	# figure_size = 4 * len(matrix) / 250
 	fig = plt.figure(figsize=(8, 8))
 	if not cbar:
 		plt.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
@@ -115,26 +130,34 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 	mask1 = mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
 	        matrix_start_slider_x.value:matrix_end_slider_x.value].astype('bool')
 	
+	if tad_button.active:
+		matrix = pearson(oe(matrix))
+	
+	# use_rows = np.where(np.sum(mask1 == 1, axis=0) != len(matrix))[0]
+	# matrix = matrix[use_rows, :]
+	# matrix = matrix[:, use_rows]
+	# mask1 = mask1[use_rows, :]
+	# mask1 = mask1[:, use_rows]
+	
 	matrix = matrix[::-1,:]
 	mask1 = mask1[::-1, :]
+	cmap = heatmap_color_selector.value
 
 	if quantile_button.active:
-		matrix[~mask1] = QuantileTransformer(n_quantiles=1000, output_distribution='normal').fit_transform(
-			matrix[~mask1].reshape((-1, 1))).reshape((-1))
-		if cmap is None:
-			if darkmode_button.active:
-				cmap="viridis"
-			else:
-				cmap = "Reds"
-		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=-vmin_vmax_slider.value, vmax=vmin_vmax_slider.value)
-	else:
-		if cmap is None:
-			if darkmode_button.active:
-				cmap="viridis"
-			else:
-				cmap = "Reds"
+		# matrix[~mask1] = QuantileTransformer(n_quantiles=1000, output_distribution='normal').fit_transform(
+		# 		# 	matrix[~mask1].reshape((-1, 1))).reshape((-1))
 		
-		vmin, vmax = np.quantile(matrix[matrix>0], 0.1), np.quantile(matrix[matrix>0], 0.9)
+		matrix = QuantileTransformer(n_quantiles=5000, output_distribution='normal').fit_transform(
+					matrix.reshape((-1, 1))).reshape((len(matrix), -1))
+		cutoff = (1 - vmin_vmax_slider.value) / 2
+		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1-cutoff)+0.01
+		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
+	else:
+
+		
+		matrix = np.nan_to_num(matrix, 0.0)
+		cutoff = (1 - vmin_vmax_slider.value) / 2
+		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1 - cutoff)+0.01
 		
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
@@ -158,14 +181,6 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 		fff = Image.new('RGBA', im1.size, bg_color)
 		im1=Image.composite(im1, fff, im1)
 		
-		# image_data = np.asarray(im1)[:, :, :3]
-		# image_data_bw = (image_data.sum(axis=2) < 255 * 3) * 1.0
-		# non_empty_rows = np.where(image_data_bw.sum(axis=1) > 0)[0]
-		#
-		# height = im1.height
-		# width = im1.width
-		# imageBox = (0, min(non_empty_rows), width, int(np.max(non_empty_rows)))
-		# im1 = im1.crop(imageBox)
 		img = np.asarray(im1)
 		
 	img = img.view(dtype=np.uint32).reshape((img.shape[0], -1))
@@ -189,10 +204,10 @@ def async_heatmap11(selected, id):
 			return
 		# plot raw
 		if len(selected) > 1:
-			b = np.array(np.sum(origin_sparse[selected], axis=0).todense())
+			b = np.array(np.sum(origin_sparse[selected], axis=0).todense()) / len(selected)
 		else:
 			b = origin_sparse[selected[0]]
-			b = np.array(b.todense())
+			b = np.log(1+np.array(b.todense()))
 		# print (np.sum(b>0), b.shape)
 		# img = plot_heatmap_RdBu_tad(b, cmap="Reds")
 	except Exception as e:
@@ -217,6 +232,7 @@ def async_heatmap12(selected, id):
 			p = 0
 			for i in selected:
 				proba = np.array(f["cell_%d" % i])
+				
 				p += proba
 			b[xs, ys] += p
 		b = b + b.T
@@ -277,13 +293,14 @@ def async_heatmap22(selected, id):
 			p = 0
 			for i in selected:
 				proba = np.array(f["cell_%d" % i])
+				proba -= np.min(proba)
 				proba[proba <= 1e-5] = 0.0
 				p += proba
 			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
 		
 		b *= (1 - mask)
-		b = rankmatch(b, bulk)
+		np.fill_diagonal(b, np.max(b))
 		# img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
@@ -312,13 +329,13 @@ def async_heatmap31(selected, id):
 			p = 0.0
 			for i in selected:
 				proba = np.array(f["cell_%d" % i])
+				proba -= np.min(proba)
 				proba[proba <= 1e-5] = 0.0
 				p += proba
 			b[xs.astype('int'), ys.astype('int')] += p
 			b = b + b.T
 		
 		b *= (1 - mask)
-		b = rankmatch(b, bulk)
 		np.fill_diagonal(b, np.max(b))
 		# img = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
@@ -515,7 +532,6 @@ def update(attr, old, new):
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 			distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
-			print(new)
 			
 			selected = list(new)
 		update_scatter(selected)
@@ -648,7 +664,7 @@ def color_update(attr, old, new):
 		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 		# print (v)
 		model1 = gaussian_kde(v.T)
-		model2 = gaussian_kde(v.T, bw_method=model1.factor*2)
+		model2 = gaussian_kde(v.T, bw_method=model1.factor)
 		model1 = gaussian_kde(v.T, bw_method=model1.factor/2)
 		s = model1(v.T).reshape((-1))
 		s2 = model2(v.T).reshape((-1))
@@ -731,15 +747,15 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	distance = pairwise_distances(v, metric='euclidean')
 	distance_sorted = np.sort(distance, axis=-1)
 	distance /= np.quantile(distance_sorted[:, 1:neighbor_num].reshape((-1)), q=0.5)
+	info = xy_selector.value.split("-")
+	x_selector_value, y_selector_value = int(info[0]), int(info[1])
 	
 	if dim_reduction_selector.value == "PCA":
 		
 		v = PCA(n_components=3).fit_transform(v)
-		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
+		x, y = v[:, int(x_selector_value) - 1], v[:, int(y_selector_value) - 1]
 	elif dim_reduction_selector.value == "UMAP":
-		# v = PCA(v.shape[-1]).fit_transform(v)
-		# v = StandardScaler().fit_transform(v)
-		if max(int(x_selector.value), int(y_selector.value)) < 3:
+		if max(int(x_selector_value), int(y_selector_value)) < 3:
 			
 			model = UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
 		else:
@@ -749,15 +765,15 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 			for key in params:
 				setattr(model, key, params[key])
 		v = model.fit_transform(v)
-		x, y = v[:, int(x_selector.value) - 1], v[:, int(y_selector.value) - 1]
+		x, y = v[:, int(x_selector_value) - 1], v[:, int(y_selector_value) - 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - UMAP finished" % timestr)
 		format_message()
 	elif dim_reduction_selector.value == "TSNE":
-		# v = TSNE(n_components=3, n_jobs=30).fit(v)
-		# v = PCA(v.shape[-1]).fit_transform(v)
-		# v = StandardScaler().fit_transform(v)
-		model = TSNE(n_components=2, n_jobs=-1, init='pca')
+		if max(int(x_selector_value), int(y_selector_value)) < 3:
+			model = TSNE(n_components=2, n_jobs=-1, init='pca')
+		else:
+			model = TSNE(n_components=3, n_jobs=-1, init='pca')
 		if "TSNE_params" in config:
 			params = config['TSNE_params']
 			for key in params:
@@ -769,11 +785,6 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		format_message()
 		
 	# generate neighbor info
-	neighbor_info = []
-	# for i in trange(cell_num):
-	# 	d = distance[i]
-	# 	neighbor = get_neighbor(d, neighbor_num)
-	# 	neighbor_info.append(neighbor)
 	neighbor_info = np.argsort(distance, axis=-1)[:, :neighbor_num]
 	
 	
@@ -801,10 +812,6 @@ def initialize(config_name, correct_color=False):
 	with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
 		color_scheme = pickle.load(f)
 	
-	# origin_source = h5py.File(os.path.join(temp_dir, "origin_chr1_RGBA.hdf5"), "r")
-	# conv_source = h5py.File(os.path.join(temp_dir, "conv_chr1_RGBA.hdf5"), "r")
-	# proba_source = h5py.File(os.path.join(temp_dir, "proba_chr1_RGBA.hdf5"), "r")
-	# neighbor_source = h5py.File(os.path.join(temp_dir, "proba_chr1_RGBA.hdf5"), "r")
 	# generate embedding vectors
 	temp_str = "_origin"
 	v = np.load(os.path.join(temp_dir, "%s_0%s.npy" % (embedding_name, temp_str)))
@@ -879,7 +886,7 @@ def tapcallback(attr, old, new):
 	
 def plot_distance_update(attr, old, new):
 	global mask
-	mask = create_mask(int(plot_distance_selector.value))
+	mask, final = create_mask(int(plot_distance_selector.value))
 	update_heatmap(r.data_source.selected.indices)
 
 
@@ -889,7 +896,6 @@ def anything_that_updates_heatmap(attr, old, new):
 		if int(local_selection_slider.value) > 1:
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
-			# print (distance, distance.shape)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 			update_heatmap(new)
 			return
@@ -902,11 +908,22 @@ def anything_that_updates_heatmap_button(button):
 		if int(local_selection_slider.value) > 1:
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
-			# print (distance, distance.shape)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 			update_heatmap(new)
 			return
 	update_heatmap(r.data_source.selected.indices)
+
+
+def local_selection_update(attr, old, new):
+	anything_that_updates_heatmap(attr, old, new)
+	update(attr, old, r.data_source.selected.indices)
+def minus_cell(button):
+	cell_slider.value -= 1
+	cell_slider.value_throttled -= 1
+	
+def plus_cell(button):
+	cell_slider.value += 1
+	cell_slider.value_throttled += 1
 
 def axis_update(attr, old, new):
 	initialize(name2config[data_selector.value], correct_color=True)
@@ -948,20 +965,18 @@ source = ColumnDataSource(data = dict(x=[], y=[], color=[], legend_info=[],
 				label_info=np.array([])))
 
 # create all the widgets
-dim_reduction_selector = Select(title='Projection method', value="PCA", options = ["PCA", "UMAP", "TSNE"], width=150)
+dim_reduction_selector = Select(title='Vis method', value="PCA", options = ["PCA", "UMAP", "TSNE"], width=150)
 
-x_selector = Select(title="x-axis", value="1", options=["1","2","3"], width=150)
-y_selector = Select(title="y-axis", value="2", options=["1","2","3"], width=150)
+# x_selector = Select(title="x-axis", value="1", options=["1","2","3"], width=96)
+# y_selector = Select(title="y-axis", value="2", options=["1","2","3"], width=96)
 
+xy_selector = Select(title="x-axis / y-axis", value="1-2", options=["1-2", "1-3", "2-3"], width=150)
 
 # create the heatmap visualization
 heatmap11 = figure(toolbar_location="above",tools="pan, wheel_zoom, reset, save", plot_width=300, plot_height=300,
 				 min_border=5,output_backend="webgl", title='raw', active_scroll = "wheel_zoom")
 heatmap12 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300,x_range=heatmap11.x_range, y_range=heatmap11.y_range,
 				 min_border=5,output_backend="webgl", title='conv-rwr', active_scroll = "wheel_zoom")
-
-# heatmap21 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
-# 				 min_border=5,output_backend="webgl", title='Higashi(i)nfinity', active_scroll = "wheel_zoom")
 
 heatmap22 = figure(toolbar_location="above", tools="pan, wheel_zoom, reset, save",plot_width=300, plot_height=300, x_range=heatmap11.x_range, y_range=heatmap11.y_range,
 				 min_border=5,output_backend="webgl", title='Higashi(0)', active_scroll = "wheel_zoom")
@@ -979,12 +994,10 @@ white = np.ones((20,20,4), dtype='int8') * 255
 white_img = white.view(dtype=np.uint32).reshape((white.shape[0], -1))
 heatmap11_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap12_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
-# heatmap21_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap22_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 heatmap31_source = ColumnDataSource(data=dict(img=[white_img],x=[0],y=[0],dw=[10], dh=[10]))
 h1 = heatmap11.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap11_source)
 h2 = heatmap12.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap12_source)
-# h3 = heatmap21.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap21_source)
 h4 = heatmap22.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap22_source)
 h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heatmap31_source)
 
@@ -1003,7 +1016,7 @@ data_selector = Select(title='scHi-C dataset', value=avail_data[0], options=avai
 
 chrom_selector = Select(title='chromosome selector', value="chr1", options=config['chrom_list'], width=150)
 
-
+heatmap_color_selector = Select(title='heatmap cmap', value="Reds", options=["Reds", "RdBu_r", "viridis", "cmo.curl"], width=150)
 
 reload_button = Button(label="Reload", button_type="success", width=150)
 reload_button.on_click(reload_update)
@@ -1016,7 +1029,10 @@ unsup_button.on_click(Kmean_ARI)
 clear_button = Button(label="Clear log", button_type="danger", width=150)
 clear_button.on_click(clear_log)
 
-
+minus_button = Button(label="Previous", button_type='primary', width=150)
+plus_button = Button(label="Next", button_type='primary', width=150)
+minus_button.on_click(minus_cell)
+plus_button.on_click(plus_cell)
 
 temp_dir = config['temp_dir']
 origin_sparse = np.load(os.path.join(temp_dir, "chr1_sparse_adj.npy"), allow_pickle=True)
@@ -1027,7 +1043,7 @@ local_selection_slider = Slider(title='Local selection number', value=1, start=1
 rotation_button = Toggle(label="Rotate heatmap", button_type="primary", width=150)
 rotation_button.on_click(anything_that_updates_heatmap_button)
 
-tad_button = Toggle(label="Display TADs", button_type="primary", width=150)
+tad_button = Toggle(label="Compartment", button_type="primary", width=150)
 quantile_button = Toggle(label="Quantile_norm", button_type='primary', width=150, active=False)
 VC_button = Toggle(label="VC_SQRT", button_type='primary', width=150, active=False)
 
@@ -1084,7 +1100,7 @@ matrix_end_slider_x = Slider(title="Heatmap end: x", value=origin_sparse[0].shap
 
 matrix_start_slider_y = Slider(title="Heatmap start: y", value=0, start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
 matrix_end_slider_y = Slider(title="Heatmap end: y", value=origin_sparse[0].shape[-1], start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
-vmin_vmax_slider = Slider(title='Vmin/Vmax(-/+)', value=1.5, start=0.1,end=4.0, step=0.1, value_throttled=2000, width=150)
+vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.9, start=0.0,end=1.0, step=0.01, value_throttled=2000, width=150)
 
 
 
@@ -1103,12 +1119,6 @@ info_log = Div(text="", width = 300, height = 300, height_policy="fixed",
 						  'scroll-snap-type': 'y mandatory'
 						  }, css_classes = ['div_container'] )
 
-# info_log.js_on_change("text", CustomJS(args=dict(div=info_log, button = reload_button),
-#                                        code='''
-#                                        var line = Number(div.scrollTop).toFixed(2);
-# 								        div.scrollTop = div.scrollHeight;
-# 								        button.label=line;
-#                                        '''))
 
 global blackorwhite
 blackorwhite="white"
@@ -1119,7 +1129,7 @@ def change_theme(button):
 	if blackorwhite == "white":
 		curdoc().theme = "dark_minimal"
 		blackorwhite = "black"
-		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, x_selector, y_selector]:
+		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, xy_selector,  heatmap_color_selector]:
 			selector.css_classes = ['custom_select']
 		
 		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector, local_selection_slider]:
@@ -1129,7 +1139,7 @@ def change_theme(button):
 	else:
 		curdoc().theme = theme_backup
 		blackorwhite = "white"
-		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, x_selector, y_selector]:
+		for selector in [data_selector, chrom_selector, dim_reduction_selector, color_selector, xy_selector,  heatmap_color_selector]:
 			selector.css_classes = []
 		for slider in [size_selector, vmin_vmax_slider, cell_slider, plot_distance_selector, local_selection_slider]:
 			slider.css_classes = []
@@ -1167,14 +1177,15 @@ layout= column(row(
 				row(darkmode_button, rotation_button),
 				row(tad_button, clear_button),
 				row(data_selector, chrom_selector),
-				row(dim_reduction_selector, color_selector),
-				row(x_selector, y_selector),
+				row(dim_reduction_selector, xy_selector),
+				row(color_selector, heatmap_color_selector),
 				row(size_selector, local_selection_slider),
 				row(matrix_start_slider_x, matrix_end_slider_x),
 				row(matrix_start_slider_y, matrix_end_slider_y),
 				row(plot_distance_selector, vmin_vmax_slider),
 				row(quantile_button, VC_button),
-				cell_slider,
+				row(minus_button, plus_button),
+				row( cell_slider),
 				categorical_info,
 				continuous_info
 			),
@@ -1199,10 +1210,12 @@ dim_reduction_selector.on_change('value', reduction_update)
 data_selector.on_change('value', data_update)
 size_selector.on_change('value', size_update)
 chrom_selector.on_change('value', chrom_update)
-x_selector.on_change('value', axis_update)
-y_selector.on_change('value', axis_update)
+heatmap_color_selector.on_change('value', anything_that_updates_heatmap)
+xy_selector.on_change('value', axis_update)
+# y_selector.on_change('value', axis_update)
 cell_slider.on_change('value_throttled', cell_slider_update)
 vmin_vmax_slider.on_change('value_throttled', anything_that_updates_heatmap)
+local_selection_slider.on_change('value_throttled', local_selection_update)
 matrix_start_slider_x.on_change('value_throttled', anything_that_updates_heatmap)
 matrix_end_slider_x.on_change('value_throttled', anything_that_updates_heatmap)
 matrix_start_slider_y.on_change('value_throttled', anything_that_updates_heatmap)
