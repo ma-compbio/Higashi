@@ -12,13 +12,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import h5py
 import pickle
-from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA
-from sklearn.linear_model import LinearRegression
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, KBinsDiscretizer
 import subprocess
-from umap import UMAP
 from fbpca import pca
-from scipy.sparse.linalg import svds
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device_ids = [0, 1]
 
@@ -353,24 +351,8 @@ def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	# sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
 	# print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
 	
-	# print (c, temp)
 	U, s, Vt = pca(temp, k=size)  # Automatically centers.
 	temp1 =  np.array(U[:, :size] * s[:size])
-	# temp1 = StandardScaler().fit_transform(temp1)
-	# if "batch_id" in config:
-	# 	batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
-	# 	new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
-	# 	for i,u in enumerate(np.unique(batch_id_info)):
-	# 		new_batch_id_info[batch_id_info == u, i] = 1
-	#
-	#
-	# 	batch_id_info = np.array(new_batch_id_info)
-	#
-	# 	residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
-	#
-	# 	temp1 = residual
-	# else:
-	# 	temp1 = np.array(temp1)
 	
 	np.save(os.path.join(temp_dir, "%s_cell_PCA.npy" % c), temp1)
 	
