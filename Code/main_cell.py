@@ -42,6 +42,7 @@ def get_free_gpu(num=1):
 	else:
 		return
 
+
 def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_chrom, y):
 	x = batch_data
 	w = batch_weight
@@ -234,6 +235,7 @@ def check_nonzero(x, c):
 		return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
 	else:
 		return sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
+
 	
 def generate_negative_cpu(x, x_chrom, forward=True):
 	global pair_ratio
@@ -247,7 +249,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 		func1 = tqdm
 	
 	# Why neg_num + 1? Because sometimes it may fails to find samples after certain trials.
-	# So we just add for trials in the first place
+	# So we just add 1 fore more trials in the first place
 	
 	change_list_all = rg.integers(0, x.shape[-1], (len(x), neg_num))
 	simple_or_hard_all = rg.random((len(x), neg_num + 1))
@@ -313,8 +315,6 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 
 def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 	if neg_num == 0:
-		# pos_weight = torch.tensor(edge_weight)
-		# pos_part = np2tensor_hyper(edges_part, dtype=torch.long)
 		y = np.ones((len(edges_part), 1))
 		w = np.ones((len(edges_part), 1)) * edge_weight.reshape((-1, 1))
 		x = edges_part
@@ -461,14 +461,6 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 		elapse=(time.time() - start)))
 
 
-def get_neighbor(x):
-	
-	a = np.copy(x)
-	temp = (a + neighbor_mask)
-	temp = np.sort(temp, axis=-1)
-	return list(temp)
-
-
 def save_embeddings(model):
 	model.eval()
 	with torch.no_grad():
@@ -499,20 +491,6 @@ def save_embeddings(model):
 	torch.cuda.empty_cache()
 	return embeddings
 
-def remove_BE_linear(temp1):
-	if "batch_id" in config:
-		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
-		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
-		for i, u in enumerate(np.unique(batch_id_info)):
-			new_batch_id_info[batch_id_info == u, i] = 1
-		
-		batch_id_info = np.array(new_batch_id_info)
-		
-		residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
-		
-		temp1 = residual
-
-	return temp1
 		
 def generate_attributes():
 	embeddings = []
@@ -521,20 +499,9 @@ def generate_attributes():
 	
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
-		# a = StandardScaler().fit_transform(a)
-		# a = StandardScaler().fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
-		# a = MinMaxScaler((-0.1, 0.1)).fit_transform(a.reshape((-1, 1))).reshape((len(a), -1))
 		pca_after.append(a)
 	pca_after = np.concatenate(pca_after, axis=-1)
 	
-	# pca_after = StandardScaler().fit_transform(pca_after)
-	# pca_after = remove_BE_linear(pca_after)
-	# pca_after = StandardScaler().fit_transform(pca_after.reshape((-1, 1))).reshape((len(pca_after), -1))
-	#
-	# test = PCA(n_components=32).fit_transform(pca_after)
-	# from umap import UMAP
-	# test = UMAP(n_components=2, n_neighbors=30, min_dist=0.3).fit_transform(test)
-	# np.save("../pca_after_umap.npy", test)
 	if coassay:
 		print ("coassay")
 		cell_attributes = np.load(os.path.join(temp_dir, "pretrain_coassay.npy")).astype('float32')
@@ -546,10 +513,10 @@ def generate_attributes():
 		embeddings.append(pca_after)
 	else:
 		# print (pca_after)
-		pca_after1 = remove_BE_linear(pca_after)
+		pca_after1 = remove_BE_linear(pca_after, config, data_dir)
 		pca_after1 = StandardScaler().fit_transform(pca_after1.reshape((-1, 1))).reshape((len(pca_after), -1))
 		pca_after2 = StandardScaler().fit_transform(pca_after)
-		pca_after2 = remove_BE_linear(pca_after2)
+		pca_after2 = remove_BE_linear(pca_after2, config, data_dir)
 		pca_after2 = StandardScaler().fit_transform(pca_after2.reshape((-1, 1))).reshape((len(pca_after2), -1))
 		targets.append(pca_after2.astype('float32'))
 		embeddings.append(pca_after1.astype('float32'))
@@ -585,6 +552,7 @@ def generate_attributes():
 	# attribute_dict = StandardScaler().fit_transform(attribute_dict)
 	return embeddings, attribute_dict, targets
 
+
 def get_cell_neighbor(start=1):
 	# save_embeddings(higashi_model, True)
 	v = np.load(os.path.join(temp_dir, "%s_0_origin.npy" % embedding_name))
@@ -619,49 +587,6 @@ def mp_impute(config_path, path, name, mode, cell_start, cell_end, sparse_path, 
 	print (cmd)
 	subprocess.call(cmd)
 
-
-def get_neighbor_mask():
-	neighbor_mask = np.zeros((5, 3), dtype='int')
-	count = 0
-	for i in [-1, 0, 1]:
-		for j in [-1, 0, 1]:
-			if i !=0 and j !=0:
-				continue
-			neighbor_mask[count, 1] += i
-			neighbor_mask[count, 2] += j
-			count += 1
-	return neighbor_mask
-
-
-def linkhdf5(name, cell_id_splits):
-	print ("start linking hdf5 files")
-	for chrom in impute_list:
-		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
-		for i, ids in enumerate(cell_id_splits):
-			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
-				if i == 0:
-					f.create_dataset('coordinates', data=input_f['coordinates'])
-					
-				for cell in tqdm(ids):
-					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
-		f.close()
-	for chrom in impute_list:
-		for i in range(len(cell_id_splits)):
-			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
-			
-def modify_nbr_hdf5(name1, name2):
-	for chrom in impute_list:
-		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
-		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
-		
-		for id_ in f1.keys():
-			if "cell" in id_:
-				data1 = f2[id_]
-				v = np.array(f2[id_]) + np.array(f1[id_])
-				data1[...] = v
-		f1.close()
-		f2.close()
-	
 	
 if __name__ == '__main__':
 	# Get parameters from config file
@@ -1079,13 +1004,13 @@ if __name__ == '__main__':
 			time.sleep(60)
 		impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
 		impute_pool.shutdown(wait=True)
-		linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all)
+		linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
 		cell_id_all = np.arange(num[0])
 
 		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
-		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all)
+		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
 		
-	modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num))
+	modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)
 	# Rank match is to make sure the distribution of predicted values match real population Hi-C values.
 	rank_match_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), temp_dir, impute_list)
 	rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list)

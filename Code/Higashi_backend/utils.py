@@ -9,6 +9,8 @@ from scipy.stats import pearsonr,spearmanr
 import json
 import os
 import h5py
+import pickle
+from sklearn.linear_model import LinearRegression
 
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
@@ -171,6 +173,36 @@ def rankmatch(from_mtx, to_mtx):
 	temp2[order] = temp
 	return temp2.reshape((len(from_mtx), -1))
 
+
+def linkhdf5(name, cell_id_splits, temp_dir, impute_list):
+	print("start linking hdf5 files")
+	for chrom in impute_list:
+		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
+		for i, ids in enumerate(cell_id_splits):
+			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
+				if i == 0:
+					f.create_dataset('coordinates', data=input_f['coordinates'])
+				
+				for cell in tqdm(ids):
+					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
+		f.close()
+	for chrom in impute_list:
+		for i in range(len(cell_id_splits)):
+			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
+
+def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
+	for chrom in impute_list:
+		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
+		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
+		
+		for id_ in f1.keys():
+			if "cell" in id_:
+				data1 = f2[id_]
+				v = np.array(f2[id_]) + np.array(f1[id_])
+				data1[...] = v
+		f1.close()
+		f2.close()
+		
 def rank_match_hdf5(name, temp_dir, chrom_list):
 	for chrom in chrom_list:
 		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
@@ -181,7 +213,6 @@ def rank_match_hdf5(name, temp_dir, chrom_list):
 		xs, ys = coordinates[:, 0], coordinates[:, 1]
 		values = bulk[xs, ys]
 		
-		
 		for id_ in f.keys():
 			if "cell" in id_:
 				data = f[id_]
@@ -190,3 +221,36 @@ def rank_match_hdf5(name, temp_dir, chrom_list):
 				v[order] = np.sort(values)
 				data[...] = v
 		f.close()
+
+def get_neighbor(x, neighbor_mask):
+	a = np.copy(x)
+	temp = (a + neighbor_mask)
+	temp = np.sort(temp, axis=-1)
+	return list(temp)
+
+def get_neighbor_mask():
+	neighbor_mask = np.zeros((5, 3), dtype='int')
+	count = 0
+	for i in [-1, 0, 1]:
+		for j in [-1, 0, 1]:
+			if i !=0 and j !=0:
+				continue
+			neighbor_mask[count, 1] += i
+			neighbor_mask[count, 2] += j
+			count += 1
+	return neighbor_mask
+
+def remove_BE_linear(temp1, config, data_dir):
+	if "batch_id" in config:
+		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
+		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
+		for i, u in enumerate(np.unique(batch_id_info)):
+			new_batch_id_info[batch_id_info == u, i] = 1
+		
+		batch_id_info = np.array(new_batch_id_info)
+		
+		residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+		
+		temp1 = residual
+	
+	return temp1
