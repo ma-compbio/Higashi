@@ -1,21 +1,15 @@
 import multiprocessing as mp
-import os
-import time
 import warnings
 from Higashi_backend.Modules import *
 from Higashi_backend.Functions import *
 from Higashi_backend.utils import *
-from sklearn.decomposition import PCA
 from Impute import impute_process
 import argparse
 import resource
 
 from sklearn.preprocessing import KBinsDiscretizer, StandardScaler, MinMaxScaler
-from sklearn.linear_model import LinearRegression
 import pickle
 import subprocess
-
-import h5py
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi main program")

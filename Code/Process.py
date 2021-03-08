@@ -25,7 +25,7 @@ import argparse
 
 
 def parse_args():
-	parser = argparse.ArgumentParser(description="Higashi visualization tool")
+	parser = argparse.ArgumentParser(description="Higashi Processing")
 	parser.add_argument('-c', '--config', type=str, default="./config.JSON")
 	return parser.parse_args()
 

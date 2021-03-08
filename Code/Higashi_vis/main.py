@@ -11,7 +11,7 @@ from datetime import datetime
 from sklearn.decomposition import PCA
 from umap import UMAP
 from sklearn.metrics import pairwise_distances
-
+from sklearn.manifold import MDS
 from sklearn.preprocessing import StandardScaler
 from functools import partial
 
@@ -150,15 +150,16 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 		matrix = QuantileTransformer(n_quantiles=5000, output_distribution='normal').fit_transform(
 					matrix.reshape((-1, 1))).reshape((len(matrix), -1))
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1-cutoff)+0.01
+		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1-cutoff)+1e-15
+		print(vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	else:
 
 		
 		matrix = np.nan_to_num(matrix, 0.0)
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1 - cutoff)+0.01
-		
+		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1 - cutoff)+1e-15
+		print (vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
 		ax.set_facecolor('#20262B')
@@ -783,6 +784,20 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - TSNE finished" % timestr)
 		format_message()
+	elif dim_reduction_selector.value == 'MDS':
+		if max(int(x_selector_value), int(y_selector_value)) < 3:
+			model = MDS(n_components=2, n_jobs=-1)
+		else:
+			model = MDS(n_components=3, n_jobs=-1)
+		if "MDS_params" in config:
+			params = config['MDS_params']
+			for key in params:
+				setattr(model, key, params[key])
+		v = model.fit_transform(v)
+		x, y = v[:, 0], v[:, 1]
+		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+		msg_list.append("%s - MDS finished" % timestr)
+		format_message()
 		
 	# generate neighbor info
 	neighbor_info = np.argsort(distance, axis=-1)[:, :neighbor_num]
@@ -824,6 +839,10 @@ def initialize(config_name, correct_color=False):
 	elif dim_reduction_selector.value == "TSNE":
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - TSNE computing, it takes time" % timestr)
+		format_message()
+	elif dim_reduction_selector.value == "MDS":
+		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+		msg_list.append("%s - MDS computing, it takes time" % timestr)
 		format_message()
 	curdoc().add_next_tick_callback(partial(calculate_and_update, v, neighbor_num, correct_color))
 	
@@ -965,7 +984,7 @@ source = ColumnDataSource(data = dict(x=[], y=[], color=[], legend_info=[],
 				label_info=np.array([])))
 
 # create all the widgets
-dim_reduction_selector = Select(title='Vis method', value="PCA", options = ["PCA", "UMAP", "TSNE"], width=150)
+dim_reduction_selector = Select(title='Vis method', value="PCA", options = ["PCA", "UMAP", "TSNE", "MDS"], width=150)
 
 # x_selector = Select(title="x-axis", value="1", options=["1","2","3"], width=96)
 # y_selector = Select(title="y-axis", value="2", options=["1","2","3"], width=96)
