@@ -27,8 +27,9 @@ from bokeh.transform import linear_cmap
 from bokeh import events
 
 from sklearn.cluster import KMeans,AgglomerativeClustering
-from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import adjusted_rand_score, pairwise_distances
 from sklearn.preprocessing import QuantileTransformer
+
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
@@ -150,15 +151,13 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 		matrix = QuantileTransformer(n_quantiles=5000, output_distribution='normal').fit_transform(
 					matrix.reshape((-1, 1))).reshape((len(matrix), -1))
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1-cutoff)+1e-15
+		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1-cutoff)+1e-15
 		print(vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	else:
-
-		
 		matrix = np.nan_to_num(matrix, 0.0)
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix, cutoff), np.quantile(matrix, 1 - cutoff)+1e-15
+		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1 - cutoff)+1e-15
 		print (vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
@@ -174,7 +173,7 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 	if rotation_button.active:
 		print ("rotation")
 		im1 = Image.fromarray(img, mode='RGBA')
-		im1 = im1.rotate(45, expand=True)
+		im1 = im1.rotate(-45, expand=True)
 		if darkmode_button.active:
 			bg_color = (32, 38, 43)
 		else:
@@ -738,8 +737,37 @@ def reduction_update(attr, old, new):
 	
 def widget_update():
 	cell_slider.end=cell_num
-	color_selector.options = ["None", "kde", "kde_ratio", "read_count"] + list(color_scheme.keys())
+	color_selector.options = ["None"] + list(color_scheme.keys())+ ["kde", "kde_ratio", "read_count"]
 
+
+def mds(mat, n=2):
+	"""
+	Multidimensional scaling, MDS.
+
+	Parameters
+	----------
+	mat : numpy.ndarray
+		Distance matrix of the data points.
+
+	n : int, optional
+		The dimension of the projected points.
+		The default is 2.
+	Returns
+	-------
+	co : numpy.ndarray
+		Coordinates of the projected points.
+	"""
+	
+	# mat = np.sqrt(2 - 2 * mat)
+	h = np.eye(len(mat)) - np.ones(mat.shape) / len(mat)
+	k = -0.5 * h.dot(mat * mat).dot(h)
+	if np.any(np.isnan(k)):
+		k[np.isnan(k)] = 0
+	w, v = np.linalg.eig(k)
+	max_ = np.argsort(w)[:-n - 1:-1]
+	co = np.real(v[:, max_].dot(np.sqrt(np.diag(w[max_]))))
+	# co = np.real(v[:, :2].dot(np.sqrt(np.diag(w[:2]))))
+	return co
 
 async def calculate_and_update(v, neighbor_num, correct_color):
 	global neighbor_info, source, config
@@ -784,16 +812,35 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - TSNE finished" % timestr)
 		format_message()
-	elif dim_reduction_selector.value == 'MDS':
-		if max(int(x_selector_value), int(y_selector_value)) < 3:
-			model = MDS(n_components=2, n_jobs=-1)
-		else:
-			model = MDS(n_components=3, n_jobs=-1)
-		if "MDS_params" in config:
-			params = config['MDS_params']
-			for key in params:
-				setattr(model, key, params[key])
-		v = model.fit_transform(v)
+	elif dim_reduction_selector.value == 'MDS-euclidean':
+		# if max(int(x_selector_value), int(y_selector_value)) < 3:
+		# 	model = MDS(n_components=2, n_jobs=-1)
+		# else:
+		# 	model = MDS(n_components=3, n_jobs=-1)
+		# if "MDS_params" in config:
+		# 	params = config['MDS_params']
+		# 	for key in params:
+		# 		setattr(model, key, params[key])
+		# v = model.fit_transform(v)
+		v = pairwise_distances(v, metric='euclidean')
+		v =  mds(v, 2)
+		x, y = v[:, 0], v[:, 1]
+		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+		msg_list.append("%s - MDS finished" % timestr)
+		format_message()
+	elif dim_reduction_selector.value == 'MDS-cosine':
+		v = pairwise_distances(v, metric='cosine')
+		print (v)
+		# if max(int(x_selector_value), int(y_selector_value)) < 3:
+		# 	model = MDS(n_components=2, n_jobs=-1, dissimilarity='precomputed')
+		# else:
+		# 	model = MDS(n_components=3, n_jobs=-1, dissimilarity='precomputed')
+		# if "MDS_params" in config:
+		# 	params = config['MDS_params']
+		# 	for key in params:
+		# 		setattr(model, key, params[key])
+		# v = model.fit_transform(v)
+		v = mds(v, 2)
 		x, y = v[:, 0], v[:, 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - MDS finished" % timestr)
@@ -840,7 +887,11 @@ def initialize(config_name, correct_color=False):
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - TSNE computing, it takes time" % timestr)
 		format_message()
-	elif dim_reduction_selector.value == "MDS":
+	elif dim_reduction_selector.value == "MDS-euclidean":
+		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+		msg_list.append("%s - MDS computing, it takes time" % timestr)
+		format_message()
+	elif dim_reduction_selector.value == "MDS-cosine":
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - MDS computing, it takes time" % timestr)
 		format_message()
@@ -984,7 +1035,7 @@ source = ColumnDataSource(data = dict(x=[], y=[], color=[], legend_info=[],
 				label_info=np.array([])))
 
 # create all the widgets
-dim_reduction_selector = Select(title='Vis method', value="PCA", options = ["PCA", "UMAP", "TSNE", "MDS"], width=150)
+dim_reduction_selector = Select(title='Vis method', value="PCA", options = ["PCA", "UMAP", "TSNE", "MDS-euclidean", "MDS-cosine"], width=150)
 
 # x_selector = Select(title="x-axis", value="1", options=["1","2","3"], width=96)
 # y_selector = Select(title="y-axis", value="2", options=["1","2","3"], width=96)
