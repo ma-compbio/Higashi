@@ -135,6 +135,7 @@ class TiedAutoEncoder(nn.Module):
 		else:
 			self.layer_norm = None
 		self.tied_list = tied_list
+		self.input_dropout = nn.Dropout(0.2)
 	
 	def reset_parameters(self):
 		for i, w in enumerate(self.weight_list):
@@ -168,7 +169,7 @@ class TiedAutoEncoder(nn.Module):
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
 	
 	def encoder(self, input):
-		encoded_feats = input
+		encoded_feats = self.input_dropout(input)
 		for i in range(len(self.weight_list)):
 			if self.use_bias:
 				encoded_feats = F.linear(encoded_feats, self.weight_list[i], self.bias_list[i])

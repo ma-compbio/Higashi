@@ -152,13 +152,13 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 					matrix.reshape((-1, 1))).reshape((len(matrix), -1))
 		cutoff = (1 - vmin_vmax_slider.value) / 2
 		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1-cutoff)+1e-15
-		print(vmin, vmax)
+		# print(vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	else:
 		matrix = np.nan_to_num(matrix, 0.0)
 		cutoff = (1 - vmin_vmax_slider.value) / 2
 		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1 - cutoff)+1e-15
-		print (vmin, vmax)
+		# print (vmin, vmax)
 		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
 		ax.set_facecolor('#20262B')
@@ -424,7 +424,7 @@ async def async_heatmap_all(selected):
 	if key_name != "nostore":
 		render_cache[key_name] = img_list
 	pool.shutdown(wait=True)
-	print ("finished getting images")
+	# print ("finished getting images")
 
 
 def update_heatmap(selected):
@@ -703,7 +703,7 @@ def data_update(attr, old, new):
 	r.data_source.selected.indices = []
 	
 	initialize(name2config[new], correct_color=True)
-	print(config['impute_list'])
+	# print(config['impute_list'])
 	chrom_selector.options = config['impute_list']
 	chrom_selector.value = config['impute_list'][0]
 	color_selector.value = "None"
@@ -898,6 +898,7 @@ def initialize(config_name, correct_color=False):
 	curdoc().add_next_tick_callback(partial(calculate_and_update, v, neighbor_num, correct_color))
 	
 	
+	
 def Kmean_ARI(button):
 	global config, source
 	temp_dir = config['temp_dir']
@@ -1015,7 +1016,7 @@ def chrom_update(attr, old, new):
 	
 	update_heatmap(r.data_source.selected.indices)
 
-print ("Start initialize")
+# print ("Start initialize")
 # Initializing some global variables
 
 global config, color_scheme, v, cell_num, source, neighbor_info, mask, origin_sparse, render_cache
@@ -1170,7 +1171,7 @@ matrix_end_slider_x = Slider(title="Heatmap end: x", value=origin_sparse[0].shap
 
 matrix_start_slider_y = Slider(title="Heatmap start: y", value=0, start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
 matrix_end_slider_y = Slider(title="Heatmap end: y", value=origin_sparse[0].shape[-1], start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
-vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.9, start=0.0,end=1.0, step=0.01, value_throttled=2000, width=150)
+vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.99, start=0.0,end=1.0, step=0.01, value_throttled=2000, width=150)
 
 
 
