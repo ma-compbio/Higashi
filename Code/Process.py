@@ -95,12 +95,14 @@ def extract_table():
 	
 	
 	data = np.stack([cell_id, new_chrom, bin1, bin2], axis=-1)
+	count = count[data[:, 1] >= 0]
 	data = data[data[:, 1] >= 0]
 	
 	unique, inv, unique_counts = np.unique(data, axis=0, return_inverse=True, return_counts=True)
 	new_count = np.zeros_like(unique_counts, dtype='float32')
 	for i, iv in enumerate(tqdm(inv)):
 		new_count[iv] += count[i]
+		
 		
 	np.save(os.path.join(temp_dir, "data.npy"), unique, allow_pickle=True)
 	np.save(os.path.join(temp_dir, "weight.npy"), new_count, allow_pickle=True)
@@ -311,7 +313,7 @@ def schicluster(chrom_matrix_list, dim, prct=20):
 # Run schicluster for comparisons
 def impute_all():
 	get_free_gpu()
-	schicluster_list = []
+	
 	print("start conv random walk (scHiCluster) as baseline")
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
@@ -328,7 +330,8 @@ def impute_all():
 				max_bin_ = int(config["maximum_impute_distance"] / res)
 		else:
 			max_bin_ = max_bin
-			
+		
+		
 		# Minus one because the generate_binpair function would add one in the function
 		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % c), "w") as f:
