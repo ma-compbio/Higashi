@@ -94,6 +94,7 @@ def data2triplets(data, chrom_start_end, verbose):
 	func1 = tqdm if verbose else pass_
 	for i, iv in enumerate(func1(inv)):
 		new_count[iv] += count[i]
+	del data
 	return unique, new_count
 
 # Extra the data.txt table
@@ -108,7 +109,6 @@ def extract_table():
 			unique, new_count = [], []
 			cell_tab = []
 			line_count = 0
-			finish_count = 0
 			
 			p_list = []
 			pool = ProcessPoolExecutor(max_workers=cpu_num)
@@ -135,15 +135,13 @@ def extract_table():
 						cell_tab = pd.concat(cell_tab, axis=0)
 						p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
 						cell_tab = [head]
-						
+				bar = trange(line_count, desc=' - Processing ', leave=False, )
 				for p in as_completed(p_list):
 					u_, n_ = p.result()
 					unique.append(u_)
 					new_count.append(n_)
 					
-					finish_count += chunksize
-					
-					print ("Finish %d of %d\r lines" %(finish_count, line_count), end="")
+					bar.update(n=chunksize)
 			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
 		else:
 			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
