@@ -295,7 +295,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 				temp.sort()
 				
 				# Not a suitable sample
-				if ((temp[2] - temp[1]) >= max_bin) or (temp[1] == temp[2]) or ((temp[2] - temp[1]) < min_bin):
+				if ((temp[2] - temp[1]) >= max_bin) or (temp[1] == temp[2]) or ((temp[2] - temp[1]) < max(min_bin, 2)):
 					temp = np.copy(sample)
 				
 				
@@ -705,6 +705,7 @@ if __name__ == '__main__':
 	
 	# cell_read_count = np.median(np.load(os.path.join(temp_dir, "cell_read_count.npy")))
 	total_sparsity_cell = np.load(os.path.join(temp_dir, "sparsity.npy"))
+	print ("total_sparsity_cell", np.median(total_sparsity_cell), sparsity)
 	if np.median(total_sparsity_cell) >= 0.05:
 		contractive_flag = True
 		contractive_loss_weight = 1e-3
@@ -715,13 +716,13 @@ if __name__ == '__main__':
 	
 	neighbor_mask = get_neighbor_mask()
 	
-	if sparsity > 0.35:
+	if sparsity > 0.3:
 		neg_num = 1
-	elif sparsity > 0.25:
-		neg_num = 2
 	elif sparsity > 0.2:
-		neg_num = 3
+		neg_num = 2
 	elif sparsity > 0.15:
+		neg_num = 3
+	elif sparsity > 0.1:
 		neg_num = 4
 	else:
 		neg_num = 5
@@ -855,7 +856,7 @@ if __name__ == '__main__':
 		      loss=loss,
 		      training_data_generator=training_data_generator,
 		      validation_data_generator=validation_data_generator,
-		      optimizer=[optimizer], epochs=20, batch_size=batch_size,
+		      optimizer=[optimizer], epochs=15, batch_size=batch_size,
 		      load_first=False, save_embed=True)
 		pair_ratio = 0.0
 		# Training Stage 1
@@ -865,7 +866,7 @@ if __name__ == '__main__':
 			  loss=loss,
 			  training_data_generator=training_data_generator,
 			  validation_data_generator=validation_data_generator,
-			  optimizer=[optimizer], epochs=60, batch_size=batch_size,
+			  optimizer=[optimizer], epochs=45, batch_size=batch_size,
 			  load_first=False, save_embed=True)
 		
 		# raise KeyboardInterrupt
@@ -905,7 +906,7 @@ if __name__ == '__main__':
 			  loss=loss,
 			  training_data_generator=training_data_generator,
 			  validation_data_generator=validation_data_generator,
-			  optimizer=[optimizer], epochs=60, batch_size=batch_size,
+			  optimizer=[optimizer], epochs=45, batch_size=batch_size,
 			  load_first=False, save_embed=False)
 		checkpoint = {
 				'model_link': higashi_model.state_dict()}
@@ -918,16 +919,20 @@ if __name__ == '__main__':
 
 	if training_stage <= 2:
 		# Impute Stage 2
-		if non_para_impute:
-			impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
-		else:
-			torch.save(higashi_model, save_path + "_stage2_model")
-			cell_id_all = np.arange(num[0])
-			# print (cell_id_all)
-			cell_id_all = np.array_split(cell_id_all, gpu_num-1)
-			for i in range(gpu_num-1):
-				impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
-				time.sleep(60)
+		impute_no_nbr_flag = True
+		if "impute_no_nbr" in config:
+			impute_no_nbr_flag = config['impute_no_nbr']
+		if impute_no_nbr_flag:
+			if non_para_impute:
+				impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
+			else:
+				torch.save(higashi_model, save_path + "_stage2_model")
+				cell_id_all = np.arange(num[0])
+				# print (cell_id_all)
+				cell_id_all = np.array_split(cell_id_all, gpu_num-1)
+				for i in range(gpu_num-1):
+					impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
+					time.sleep(60)
 
 	train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 	valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
@@ -971,7 +976,7 @@ if __name__ == '__main__':
 			  loss=loss,
 			  training_data_generator=training_data_generator,
 			  validation_data_generator=validation_data_generator,
-			  optimizer=[optimizer], epochs=45, batch_size=batch_size, load_first=False)
+			  optimizer=[optimizer], epochs=30, batch_size=batch_size, load_first=False)
 
 		checkpoint = {
 			'model_link': higashi_model.state_dict()}
@@ -986,25 +991,32 @@ if __name__ == '__main__':
 	del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight, training_data_generator, validation_data_generator
 	del sparse_chrom_list, weight_dict
 	# Impute Stage 3
-	if non_para_impute:
-		impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
-	else:
-		torch.save(higashi_model, save_path + "_stage3_model")
-		cell_id_all = np.arange(num[0])
-		# print (cell_id_all)
-		cell_id_all = np.array_split(cell_id_all, gpu_num)
-		for i in range(gpu_num-1):
-			impute_pool.submit(mp_impute, args.config, save_path + "_stage3_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
-			time.sleep(60)
-		impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
-		impute_pool.shutdown(wait=True)
-		linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
-		cell_id_all = np.arange(num[0])
-
-		cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
-		linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
-		
-	modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)
+	impute_with_nbr_flag = True
+	if "impute_with_nbr" in config:
+		impute_with_nbr_flag = config['impute_with_nbr']
+	if impute_with_nbr_flag:
+		if non_para_impute:
+			impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
+		else:
+			torch.save(higashi_model, save_path + "_stage3_model")
+			cell_id_all = np.arange(num[0])
+			# print (cell_id_all)
+			cell_id_all = np.array_split(cell_id_all, gpu_num)
+			for i in range(gpu_num-1):
+				impute_pool.submit(mp_impute, args.config, save_path + "_stage3_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
+				time.sleep(60)
+			impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
+			impute_pool.shutdown(wait=True)
+			linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
+			cell_id_all = np.arange(num[0])
+	
+			cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
+			linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
+	
+	if impute_with_nbr_flag & impute_no_nbr_flag:
+		modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)
 	# Rank match is to make sure the distribution of predicted values match real population Hi-C values.
-	rank_match_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), temp_dir, impute_list)
-	rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list)
+	if impute_no_nbr_flag:
+		rank_match_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), temp_dir, impute_list)
+	if impute_with_nbr_flag:
+		rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list)

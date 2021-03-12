@@ -60,16 +60,8 @@ def generate_chrom_start_end():
 	print("chrom_start_end", chrom_start_end)
 	np.save(os.path.join(temp_dir, "chrom_start_end.npy"), chrom_start_end)
 	
-# Extra the data.txt table
-
-# Memory consumption re-optimize
-def extract_table():
-	print ("extracting from data.txt")
-	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
-	data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
 	
-	# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
-	print (data)
+def data2triplets(data, chrom_start_end, verbose):
 	pos1 = np.array(data['pos1'].values)
 	pos2 = np.array(data['pos2'].values)
 	bin1 = np.floor(pos1 / res).astype('int')
@@ -93,16 +85,70 @@ def extract_table():
 		bin1[mask] += chrom_start_end[i, 0]
 		bin2[mask] += chrom_start_end[i, 0]
 	
-	
 	data = np.stack([cell_id, new_chrom, bin1, bin2], axis=-1)
 	count = count[data[:, 1] >= 0]
 	data = data[data[:, 1] >= 0]
 	
 	unique, inv, unique_counts = np.unique(data, axis=0, return_inverse=True, return_counts=True)
 	new_count = np.zeros_like(unique_counts, dtype='float32')
-	for i, iv in enumerate(tqdm(inv)):
+	func1 = tqdm if verbose else pass_
+	for i, iv in enumerate(func1(inv)):
 		new_count[iv] += count[i]
-		
+	return unique, new_count
+
+# Extra the data.txt table
+# Memory consumption re-optimize
+def extract_table():
+	print ("extracting from data.txt")
+	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
+	
+	if "structured" in config:
+		if config["structured"]:
+			chunksize = 10 ** 6
+			unique, new_count = [], []
+			cell_tab = []
+			line_count = 0
+			finish_count = 0
+			print ("First calculating how many lines are there")
+			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
+				for line in csv_file:
+					line_count += 1
+			print("There are %d neighbors" % line_count)
+			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
+				
+				reader =  pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
+				for chunk in reader:
+					# print (chunk)
+					if len(chunk['cell_id'].unique()) == 1:
+						# Only one cell, keep appending
+						cell_tab.append(chunk)
+					else:
+						# More than one cell, append all but the last part
+						last_cell = np.array(chunk.tail(1)['cell_id'])[0]
+						# print (last_cell)
+						tails = chunk.iloc[np.array(chunk['cell_id']) != last_cell, :]
+						head = chunk.iloc[np.array(chunk['cell_id']) == last_cell, :]
+						cell_tab.append(tails)
+						cell_tab = pd.concat(cell_tab, axis=0)
+						u_, n_ = data2triplets(cell_tab, chrom_start_end, verbose=False)
+						unique.append(u_)
+						new_count.append(n_)
+						cell_tab = [head]
+					finish_count += len(chunk)
+					print ("Finish %d of %d\r lines" %(finish_count, line_count), end="")
+			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+		else:
+			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
+			
+			# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
+			print(data)
+			unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
+	else:
+		data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
+	
+		# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
+		print (data)
+		unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
 		
 	np.save(os.path.join(temp_dir, "data.npy"), unique, allow_pickle=True)
 	np.save(os.path.join(temp_dir, "weight.npy"), new_count, allow_pickle=True)

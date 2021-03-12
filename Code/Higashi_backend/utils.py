@@ -213,7 +213,7 @@ def rank_match_hdf5(name, temp_dir, chrom_list):
 		xs, ys = coordinates[:, 0], coordinates[:, 1]
 		values = bulk[xs, ys]
 		values_sorted = np.sort(values)
-		print (values_sorted)
+		# print (values_sorted)
 		for id_ in f.keys():
 			if "cell" in id_:
 				data = f[id_]
