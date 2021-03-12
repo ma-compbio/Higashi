@@ -105,7 +105,7 @@ def extract_table():
 	
 	if "structured" in config:
 		if config["structured"]:
-			chunksize = 10 ** 6
+			chunksize = 10 ** 5
 			unique, new_count = [], []
 			cell_tab = []
 			line_count = 0
@@ -117,8 +117,9 @@ def extract_table():
 				for line in csv_file:
 					line_count += 1
 			print("There are %d lines" % line_count)
+			bar = trange(line_count, desc=' - Processing ', leave=False, )
 			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
-				
+				chunk_count = 0
 				reader =  pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
 				for chunk in reader:
 					# print (chunk)
@@ -135,13 +136,22 @@ def extract_table():
 						cell_tab = pd.concat(cell_tab, axis=0)
 						p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
 						cell_tab = [head]
-				bar = trange(line_count, desc=' - Processing ', leave=False, )
-				for p in as_completed(p_list):
-					u_, n_ = p.result()
-					unique.append(u_)
-					new_count.append(n_)
-					
-					bar.update(n=chunksize)
+					chunk_count += 1
+					if chunk_count > cpu_num * 2:
+						for p in as_completed(p_list):
+							u_, n_ = p.result()
+							unique.append(u_)
+							new_count.append(n_)
+							
+							bar.update(n=chunksize)
+						chunk_count = 0
+						p_list = []
+			for p in as_completed(p_list):
+				u_, n_ = p.result()
+				unique.append(u_)
+				new_count.append(n_)
+				
+				bar.update(n=chunksize)
 			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
 		else:
 			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
