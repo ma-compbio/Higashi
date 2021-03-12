@@ -105,7 +105,7 @@ def extract_table():
 	
 	if "structured" in config:
 		if config["structured"]:
-			chunksize = 10 ** 5
+			chunksize = 10 ** 6
 			unique, new_count = [], []
 			cell_tab = []
 			line_count = 0
