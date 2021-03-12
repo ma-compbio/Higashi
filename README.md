@@ -24,7 +24,7 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 # Documentation
 Please see [the wiki](https://github.com/ma-compbio/Higashi/wiki) for extensive documentation and example tutorials.
 
-
+Higashi is constantly updating, see [change log](Change-Log) for the updating history
 
 
 
