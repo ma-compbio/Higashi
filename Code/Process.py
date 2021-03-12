@@ -109,11 +109,14 @@ def extract_table():
 			cell_tab = []
 			line_count = 0
 			finish_count = 0
+			
+			p_list = []
+			pool = ProcessPoolExecutor(max_workers=cpu_num)
 			print ("First calculating how many lines are there")
 			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
 				for line in csv_file:
 					line_count += 1
-			print("There are %d neighbors" % line_count)
+			print("There are %d lines" % line_count)
 			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
 				
 				reader =  pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
@@ -130,11 +133,16 @@ def extract_table():
 						head = chunk.iloc[np.array(chunk['cell_id']) == last_cell, :]
 						cell_tab.append(tails)
 						cell_tab = pd.concat(cell_tab, axis=0)
-						u_, n_ = data2triplets(cell_tab, chrom_start_end, verbose=False)
-						unique.append(u_)
-						new_count.append(n_)
+						p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
 						cell_tab = [head]
-					finish_count += len(chunk)
+						
+				for p in as_completed(p_list):
+					u_, n_ = p.result()
+					unique.append(u_)
+					new_count.append(n_)
+					
+					finish_count += chunksize
+					
 					print ("Finish %d of %d\r lines" %(finish_count, line_count), end="")
 			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
 		else:
