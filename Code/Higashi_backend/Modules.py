@@ -638,6 +638,7 @@ class Hyper_SAGNN(nn.Module):
 			self.attribute_dict_embedding.weight.requires_grad = False
 			self.cell_feats = torch.from_numpy(cell_feats).to(device)
 		self.only_distance = False
+		self.only_model = False
 	
 	def get_embedding(self, x, x_chrom, slf_attn_mask=None, non_pad_mask=None):
 		if slf_attn_mask is None:
@@ -679,8 +680,8 @@ class Hyper_SAGNN(nn.Module):
 			output /= mask_sum
 			
 			# print (cell_feats)
-			
-			output = output + distance_proba
+			if not self.only_model:
+				output = output + distance_proba
 		else:
 			return distance_proba
 		return output

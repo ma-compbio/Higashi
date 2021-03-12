@@ -94,7 +94,7 @@ def data2triplets(data, chrom_start_end, verbose):
 	func1 = tqdm if verbose else pass_
 	for i, iv in enumerate(func1(inv)):
 		new_count[iv] += count[i]
-	del data
+		
 	return unique, new_count
 
 # Extra the data.txt table
@@ -105,7 +105,7 @@ def extract_table():
 	
 	if "structured" in config:
 		if config["structured"]:
-			chunksize = 10 ** 6
+			chunksize = int(5e5)
 			unique, new_count = [], []
 			cell_tab = []
 			line_count = 0
@@ -146,6 +146,7 @@ def extract_table():
 							bar.update(n=chunksize)
 						chunk_count = 0
 						p_list = []
+						
 			for p in as_completed(p_list):
 				u_, n_ = p.result()
 				unique.append(u_)
@@ -235,6 +236,9 @@ def create_matrix():
 	print ("generating contact maps for baseline")
 	data = np.load(os.path.join(temp_dir, "data.npy"))
 	weight = np.load(os.path.join(temp_dir, "weight.npy"))
+	
+	
+	
 	cell_num = np.max(data[:, 0]) + 1
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
 	
@@ -243,7 +247,11 @@ def create_matrix():
 	pool = ProcessPoolExecutor(max_workers=10)
 	p_list = []
 	
+	cell_feats = [[] for i in range(len(chrom_list))]
+	sparse_chrom_list = [[] for i in range(len(chrom_list))]
 	
+	save_mem = True if len(data) > 1e8 else False
+	print (len(data), save_mem)
 	for c in range(len(chrom_list)):
 		temp = data[data[:, 1] == c]
 		temp_weight = weight[data[:, 1] == c]
@@ -251,18 +259,23 @@ def create_matrix():
 		
 		size = chrom_start_end[c, 1] - chrom_start_end[c, 0]
 		cell_size = int(math.ceil(size / scale_factor))
-		p_list.append(pool.submit(create_matrix_one_chrom, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num))
 		
 		data_within_chrom_list.append(temp)
 		weight_within_chrom_list.append(temp_weight)
-	
-	
-	cell_feats = [[] for i in range(len(chrom_list))]
-	sparse_chrom_list = [[] for i in range(len(chrom_list))]
-	for p in as_completed(p_list):
-		chrom_count, non_diag_sparse, c = p.result()
-		cell_feats[c] = chrom_count
-		sparse_chrom_list[c] = non_diag_sparse
+		
+		if save_mem:
+			chrom_count, non_diag_sparse, c = create_matrix_one_chrom( c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num)
+			cell_feats[c] = chrom_count
+			sparse_chrom_list[c] = non_diag_sparse
+		else:
+			p_list.append(
+				pool.submit(create_matrix_one_chrom, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num))
+			
+	if not save_mem:
+		for p in as_completed(p_list):
+			chrom_count, non_diag_sparse, c = p.result()
+			cell_feats[c] = chrom_count
+			sparse_chrom_list[c] = non_diag_sparse
 	sparse_chrom_list = np.array(sparse_chrom_list)
 	np.save(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), sparse_chrom_list)
 	cell_feats = np.stack(cell_feats, axis=-1)
@@ -407,12 +420,14 @@ def impute_all():
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	# print (np.sum(temp1 > 0, axis=0))
-	mask = np.array(np.sum(temp1 > 0, axis=0) > 5)
+	mask = np.array(np.sum(temp1 > 0, axis=0) > 10)
 	mask = mask.reshape((-1))
 	# if type(temp) != np.ndarray:
 	# 	temp = np.array(temp.todense())
 	size = int(total_embed_size / total_chrom_size * temp.shape[-1]) + 1
+		
 	temp = temp[:, mask]
+	temp /= (np.sum(temp, axis=-1)+1e-15)
 	# sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
 	# print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
 	

@@ -31,6 +31,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	num_list = np.cumsum(num)
 	
 	model.eval()
+	model.only_model = True
 	with torch.no_grad():
 		try:
 			model.encode1.dynamic_nn.start_fix()
@@ -90,7 +91,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	bin_ids = np.concatenate(bin_ids, axis=0)
 	chrom_info = np.concatenate(chrom_info, axis=0).astype('int')
 	model.eval()
-	
+	model.only_model = True
 	with torch.no_grad():
 		for i in range(cell_start, cell_end):
 			cell = i + 1
@@ -112,8 +113,10 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 			if (i-cell_start) % 10 == 0:
 				print("Imputing %s: %d of %d, takes %.2f s" % (name, i-cell_start, cell_end-cell_start, time.time() - start))
 	
+	
 	print("finish writing, used %.2f s" % (time.time() - start))
 	model.train()
+	model.only_model = False
 	model.encode1.dynamic_nn.fix = False
 	for chrom in chrom2info:
 		slice_start, slice_end, f = chrom2info[chrom]
