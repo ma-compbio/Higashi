@@ -416,9 +416,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			auc2=valid_auc2,
 			elapse=(time.time() - start)))
 		
-		checkpoint = {
-			'model_link': model.state_dict(),
-			'epoch': epoch_i}
+		
 		
 		# Dynamic pair ratio for stage one
 		if dynamic_pair_ratio:
@@ -428,19 +426,24 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 				pair_ratio = 0.5
 			print("pair_ratio", pair_ratio)
 		
-		if (not dynamic_pair_ratio) or pair_ratio == 0.5:
-			valid_accus += [valid_auc2]
-			
-			if valid_auc2 >= max(valid_accus):
-				print("%.2f to %.2f saving" % (valid_auc2, float(max(valid_accus))))
-				torch.save(checkpoint, save_path+save_name)
-			if len(train_accus) > 0:
-				if bce_loss <= (min(train_accus) - 1e-3):
-					no_improve = 0
-					train_accus += [bce_loss]
-				else:
-					print(bce_loss, min(train_accus) - 1e-3)
-					no_improve += 1
+		# if (not dynamic_pair_ratio) or pair_ratio == 0.5:
+		# 	valid_accus += [valid_auc2]
+		#
+		# 	# if valid_auc2 >= max(valid_accus):
+		# 	# 	print("%.2f to %.2f saving" % (valid_auc2, float(max(valid_accus))))
+		# 	# 	torch.save(checkpoint, save_path+save_name)
+		# 	if len(train_accus) > 0:
+		# 		if bce_loss <= (min(train_accus) - 1e-3):
+		# 			no_improve = 0
+		# 			train_accus += [bce_loss]
+		# 		else:
+		# 			print(bce_loss, min(train_accus) - 1e-3)
+		# 			no_improve += 1
+		if epoch_i % 5 == 0:
+			checkpoint = {
+				'model_link': model.state_dict(),
+				'epoch': epoch_i}
+			torch.save(checkpoint, save_path + save_name)
 	start = time.time()
 	valid_bce_loss, valid_accu, valid_auc1, valid_auc2 = eval_epoch(model, loss, validation_data_generator)
 	print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
