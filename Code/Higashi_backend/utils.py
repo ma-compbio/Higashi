@@ -24,8 +24,8 @@ def transform_weight_class(weight, mean, neg_num):
 	weight = np.log2(weight + 1)
 	weight = weight / mean * neg_num
 	return weight
-	
-	
+
+
 def add_padding_idx(vec):
 	if len(vec.shape) == 1:
 		return np.asarray([np.sort(np.asarray(v) + 1).astype('int')
@@ -249,9 +249,11 @@ def remove_BE_linear(temp1, config, data_dir):
 			new_batch_id_info[batch_id_info == u, i] = 1
 		
 		batch_id_info = np.array(new_batch_id_info)
-		
-		residual = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
-		
-		temp1 = residual
+		temp1 = np.concatenate(temp1, axis=-1)
+		temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+	
+	else:
+		temp1 = np.concatenate(temp1, axis=-1)
+
 	
 	return temp1
