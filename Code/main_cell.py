@@ -370,7 +370,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 	return x, y, w, to_neighs
 
 
-def train(model, loss, training_data_generator, validation_data_generator, optimizer, epochs, batch_size, load_first, save_embed=False):
+def train(model, loss, training_data_generator, validation_data_generator, optimizer, epochs, load_first, save_embed=False, save_name=""):
 	global pair_ratio
 	no_improve = 0
 	if load_first:
@@ -433,7 +433,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			
 			if valid_auc2 >= max(valid_accus):
 				print("%.2f to %.2f saving" % (valid_auc2, float(max(valid_accus))))
-				torch.save(checkpoint, save_path)
+				torch.save(checkpoint, save_path+save_name)
 			if len(train_accus) > 0:
 				if bce_loss <= (min(train_accus) - 1e-3):
 					no_improve = 0
@@ -480,6 +480,7 @@ def save_embeddings(model):
 					print("update_rate: %f\t%f" % (np.min(update_rate), np.max(update_rate)))
 				except Exception as e:
 					pass
+				
 			np.save(os.path.join(temp_dir, "%s_%d_origin.npy" % (embedding_name, i)), static)
 	
 	torch.cuda.empty_cache()
@@ -494,7 +495,6 @@ def generate_attributes():
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_cell_PCA.npy" % c))
 		pca_after.append(a)
-	pca_after = np.concatenate(pca_after, axis=-1)
 	
 	if coassay:
 		print ("coassay")
@@ -508,10 +508,11 @@ def generate_attributes():
 	else:
 		# print (pca_after)
 		pca_after1 = remove_BE_linear(pca_after, config, data_dir)
-		pca_after1 = StandardScaler().fit_transform(pca_after1.reshape((-1, 1))).reshape((len(pca_after), -1))
-		pca_after2 = StandardScaler().fit_transform(pca_after)
+		pca_after1 = StandardScaler().fit_transform(pca_after1.reshape((-1, 1))).reshape((len(pca_after1), -1))
+		pca_after2 = [StandardScaler().fit_transform(x) for x in pca_after]
 		pca_after2 = remove_BE_linear(pca_after2, config, data_dir)
 		pca_after2 = StandardScaler().fit_transform(pca_after2.reshape((-1, 1))).reshape((len(pca_after2), -1))
+
 		targets.append(pca_after2.astype('float32'))
 		embeddings.append(pca_after1.astype('float32'))
 		
@@ -666,16 +667,30 @@ if __name__ == '__main__':
 	impute_with_nbr_flag = True
 	if "impute_with_nbr" in config:
 		impute_with_nbr_flag = config['impute_with_nbr']
+	
+	
+	if "embedding_epoch" in config:
+		embedding_epoch = config['embedding_epoch']
+	else:
+		embedding_epoch = 60
 		
+	if "no_nbr_epoch" in config:
+		no_nbr_epoch = config['no_nbr_epoch']
+	else:
+		no_nbr_epoch = 45
+	if "with_nbr_epoch" in config:
+		with_nbr_epoch = config['with_nbr_epoch']
+	else:
+		with_nbr_epoch = 30
 	
 	
 	#Training related parameters, but these are hard coded as they usually don't require tuning
 	# collect_num=x means, one cpu thread would collect x batches of samples
-	collect_num = 5
+	collect_num = 10
 	update_num_per_training_epoch = 1000
 	update_num_per_eval_epoch = 10
 	
-	batch_size = 192
+	batch_size = 96
 	
 	num = np.load(os.path.join(temp_dir, "num.npy"))
 	num_list = np.cumsum(num)
@@ -860,24 +875,26 @@ if __name__ == '__main__':
 	
 	# First round, no cell dependent GNN
 	if training_stage <= 1:
+		print ("Pre-training")
 		use_recon = False
 		higashi_model.only_distance=True
 		train(higashi_model,
 		      loss=loss,
 		      training_data_generator=training_data_generator,
 		      validation_data_generator=validation_data_generator,
-		      optimizer=[optimizer], epochs=15, batch_size=batch_size,
+		      optimizer=[optimizer], epochs=15,
 		      load_first=False, save_embed=True)
 		pair_ratio = 0.0
 		# Training Stage 1
+		print ("First stage training")
 		higashi_model.only_distance = False
 		use_recon = True
 		train(higashi_model,
 			  loss=loss,
 			  training_data_generator=training_data_generator,
 			  validation_data_generator=validation_data_generator,
-			  optimizer=[optimizer], epochs=45, batch_size=batch_size,
-			  load_first=False, save_embed=True)
+			  optimizer=[optimizer], epochs=embedding_epoch,
+			  load_first=False, save_embed=True, save_name="_stage1")
 		
 		# raise KeyboardInterrupt
 		checkpoint = {
@@ -908,10 +925,10 @@ if __name__ == '__main__':
 
 	higashi_model.encode1.dynamic_nn = node_embedding2
 	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
-	
-	
+
+
 	if impute_no_nbr_flag or impute_with_nbr_flag:
-	
+
 		# Second round, with cell dependent GNN, but no neighbors
 		if training_stage <= 2:
 			#Training Stage 2
@@ -919,20 +936,20 @@ if __name__ == '__main__':
 				  loss=loss,
 				  training_data_generator=training_data_generator,
 				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=45, batch_size=batch_size,
+				  optimizer=[optimizer], epochs=no_nbr_epoch,
 				  load_first=False, save_embed=False)
 			checkpoint = {
 					'model_link': higashi_model.state_dict()}
-	
+
 			torch.save(checkpoint, save_path + "_stage2")
-	
+
 		# Loading Stage 2
 		checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
 		higashi_model.load_state_dict(checkpoint['model_link'])
 
 	if training_stage <= 2:
 		# Impute Stage 2
-		
+
 		if impute_no_nbr_flag:
 			if non_para_impute:
 				impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, 1), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
@@ -944,13 +961,13 @@ if __name__ == '__main__':
 				for i in range(gpu_num-1):
 					impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
 					time.sleep(60)
-	
+
 	if impute_with_nbr_flag:
 		train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 		valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
-	
+
 		print ("train_loss", train_bce_loss, "test_loss", valid_bce_loss)
-	
+
 		# If the gap between train and valid loss is small, we can include the cell itself in the nbr_list
 		# If the gap is large, it indicates an overfitting problem. We would just use the neiboring cells to approximate
 		nbr_mode = 0 if (train_bce_loss - valid_bce_loss) < 0.1 or valid_bce_loss > 0.1 else 1
@@ -959,16 +976,16 @@ if __name__ == '__main__':
 		# Training Stage 3
 		print ("getting cell nbr's nbr list")
 		cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
-	
+
 		weight_dict = {}
-	
+
 		for i in trange(len(cell_neighbor_list)):
 			for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
 				weight_dict[(c, i)] = w
 		weighted_adj = True
-	
-	
-	
+
+
+
 		np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list, weight_dict]), allow_pickle=True)
 		# node_embedding2.off_hook()
 		# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,
@@ -980,30 +997,30 @@ if __name__ == '__main__':
 		#                                                 pass_remove=False).to(device)
 		#
 		# higashi_model.encode1.dynamic_nn = node_embedding1
-	
+
 		optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
-	
+
 		if training_stage <= 3:
 			train(higashi_model,
 				  loss=loss,
 				  training_data_generator=training_data_generator,
 				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=30, batch_size=batch_size, load_first=False)
-	
+				  optimizer=[optimizer], epochs=with_nbr_epoch,  load_first=False)
+
 			checkpoint = {
 				'model_link': higashi_model.state_dict()}
-	
+
 			torch.save(checkpoint, save_path+"_stage3")
-	
+
 		# Loading Stage 3
 		checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
 		higashi_model.load_state_dict(checkpoint['model_link'])
 		node_embedding_init.off_hook()
-	
+
 		del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight, training_data_generator, validation_data_generator
 		del sparse_chrom_list, weight_dict
 		# Impute Stage 3
-		
+
 		if impute_with_nbr_flag:
 			if non_para_impute:
 				impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
@@ -1019,10 +1036,10 @@ if __name__ == '__main__':
 				impute_pool.shutdown(wait=True)
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
 				cell_id_all = np.arange(num[0])
-		
+
 				cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
-		
+
 	if impute_with_nbr_flag & impute_no_nbr_flag:
 		modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)
 	# Rank match is to make sure the distribution of predicted values match real population Hi-C values.

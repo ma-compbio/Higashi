@@ -13,7 +13,7 @@ import multiprocessing
 import h5py
 import pickle
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, KBinsDiscretizer
+from sklearn.preprocessing import StandardScaler
 import subprocess
 from fbpca import pca
 
@@ -181,7 +181,14 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 	read_count = []
 	
 	sparsity_metric = []
-	
+	if "batch_id" in config or "library_id" in config:
+		try:
+			batch_id_info = np.array(
+				pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]])
+		except:
+			batch_id_info = np.array(
+				pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["library_id"]])
+			
 	for i in trange(cell_num):
 		mask = temp[:, 0] == i
 		temp2 = (temp[mask, 2:] - chrom_start_end[c, 0])
@@ -193,14 +200,9 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 		m1 = m1 + m1.T
 		sparse_list.append(m1)
 		
-		# m = np.zeros((cell_size, cell_size))
-		# for loc, w in zip(temp2_scale, temp_weight2):
-		# 	m[loc[0], loc[1]] += w
 		m = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(cell_size, cell_size))
 		m = m + m.T
-
-		m = m / (np.sum(m) + 1e-15)
-		cell_adj.append(m.reshape((1, -1)))
+		cell_adj.append(m)
 		
 		if res_cell != 1000000:
 			scale_factor2 = int(1000000 / res)
@@ -210,13 +212,40 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			m1 = m1 + m1.T
 			sparsity_metric.append(m1.reshape((1, -1)))
 			
-	# cell_adj = np.stack(cell_adj, axis=0)
-	# cell_adj = csr_matrix(cell_adj)
+	cell_adj = np.array(cell_adj)
+	
+	if "batch_id" in config or "library_id" in config:
+		bulk = np.sum(cell_adj, axis=0) / len(cell_adj)
+		bulk_bin = []
+		for k in range(bulk.shape[0]):
+			bulk_bin.append(np.sum(bulk[k, :]) / (bulk.shape[0]))
+		
+		batches = np.unique(batch_id_info)
+	
+		
+		for index, b in enumerate(batches):
+			b_bin = []
+			b_c = np.sum(cell_adj[batch_id_info == b], axis=0) / np.sum(batch_id_info == b)
+			for k in range(b_c.shape[0]):
+				b_bin.append(np.sum(b_c[k, :]) / b_c.shape[0])
+				
+			for i in np.where(batch_id_info == b)[0]:
+				matrix = cell_adj[i]
+				new_matrix = matrix
+				
+				row_sums = np.sqrt(b_bin)
+				row_indices, col_indices = new_matrix.nonzero()
+				new_matrix.data /= row_sums[row_indices]
+				
+				cell_adj[i] = new_matrix.reshape((1, -1))
+	else:
+		for i in range(len(cell_adj)):
+			cell_adj[i] = cell_adj[i].reshape((1, -1))
+
+		
 	cell_adj = vstack(cell_adj).tocsr()
 	bin_adj /= cell_num
 	if res_cell != 1000000:
-		# sparsity_metric = np.stack(sparsity_metric, axis=0)
-		# sparsity_metric = csr_matrix(sparsity_metric)
 		sparsity_metric = vstack(sparsity_metric).tocsr()
 		np.save(os.path.join(temp_dir, "%s_sparsity_metric_adj.npy" % chrom_list[c]), sparsity_metric)
 	np.save(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
@@ -244,18 +273,23 @@ def create_matrix():
 	
 	data_within_chrom_list = []
 	weight_within_chrom_list = []
-	pool = ProcessPoolExecutor(max_workers=10)
+	pool = ProcessPoolExecutor(max_workers=20)
 	p_list = []
 	
 	cell_feats = [[] for i in range(len(chrom_list))]
 	sparse_chrom_list = [[] for i in range(len(chrom_list))]
 	
-	save_mem = True if len(data) > 1e8 else False
+	save_mem = False
+	
 	print (len(data), save_mem)
 	for c in range(len(chrom_list)):
 		temp = data[data[:, 1] == c]
 		temp_weight = weight[data[:, 1] == c]
 		
+		if len(temp) > 1e7:
+			save_mem = True
+		else:
+			save_mem = False
 		
 		size = chrom_start_end[c, 1] - chrom_start_end[c, 0]
 		cell_size = int(math.ceil(size / scale_factor))
@@ -271,11 +305,12 @@ def create_matrix():
 			p_list.append(
 				pool.submit(create_matrix_one_chrom, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num))
 			
-	if not save_mem:
+	if len(p_list) > 0:
 		for p in as_completed(p_list):
 			chrom_count, non_diag_sparse, c = p.result()
 			cell_feats[c] = chrom_count
 			sparse_chrom_list[c] = non_diag_sparse
+			
 	sparse_chrom_list = np.array(sparse_chrom_list)
 	np.save(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), sparse_chrom_list)
 	cell_feats = np.stack(cell_feats, axis=-1)
@@ -320,12 +355,12 @@ def create_matrix():
 	weight = weight[mask]
 	data = data[mask]
 	chrom_info = chrom_info[mask]
-	
+
 	# Add 1 for padding idx
 	np.save(os.path.join(temp_dir, "filter_data.npy"), data + 1)
 	np.save(os.path.join(temp_dir, "filter_chrom.npy"), chrom_info)
 	np.save(os.path.join(temp_dir, "filter_weight.npy"), weight)
-	
+
 # Code from scHiCluster
 def neighbor_ave_gpu(A, pad):
 	if pad == 0:
@@ -420,7 +455,7 @@ def impute_all():
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	# print (np.sum(temp1 > 0, axis=0))
-	mask = np.array(np.sum(temp1 > 0, axis=0) > 10)
+	mask = np.array(np.sum(temp1 > 0, axis=0) > 5)
 	mask = mask.reshape((-1))
 	# if type(temp) != np.ndarray:
 	# 	temp = np.array(temp.todense())
@@ -428,8 +463,6 @@ def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 		
 	temp = temp[:, mask]
 	temp /= (np.sum(temp, axis=-1)+1e-15)
-	# sparsity = np.sum(temp > 0 ,axis=-1) / temp.shape[-1]
-	# print ("sparsity", np.median(sparsity), np.min(sparsity), np.max(sparsity))
 	
 	U, s, Vt = pca(temp, k=size)  # Automatically centers.
 	temp1 =  np.array(U[:, :size] * s[:size])
@@ -463,15 +496,11 @@ def generate_feats(smooth_flag=False):
 		total_linear_chrom_size += int(math.sqrt(list(temp.shape)[-1]) * res_cell / 1000000)
 
 	if len(chrom_list) > 1:
-		total_embed_size = min(max(int(temp.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)), int(temp.shape[0] * 1.3))
+		total_embed_size = min(max(int(temp.shape[0] * 0.4), int(total_linear_chrom_size * 0.4)), int(temp.shape[0] * 1.3))
 	else:
 		total_embed_size = int(np.min(temp.shape) * 0.2)
 	print ("total_feats_size", total_embed_size)
 	p_list = []
-	
-	# if "batch_id" in config:
-	# 	print ("Correcting batch effect 1st round")
-	#
 		
 	for c in chrom_list:
 		temp = chrom2adj[c]
@@ -493,6 +522,7 @@ def generate_feats(smooth_flag=False):
 	pool.shutdown(wait=True)
 
 	np.save(os.path.join(temp_dir, "sparsity.npy"), np.array([total_sparsity]))
+	
 	
 def process_signal_one(chrom):
 	cmd = ["python", "Coassay_pretrain.py", args.config, chrom]
