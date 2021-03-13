@@ -37,8 +37,16 @@ from PIL import Image
 import json
 import pickle
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from cachetools import LRUCache
-import cmocean
+try:
+	from cachetools import LRUCache
+	cache_flag = True
+except:
+	cache_flag = False
+try:
+	import cmocean
+	cmocean_flag = True
+except:
+	cmocean_flag = False
 
 def kth_diag_indices(a, k):
 	rows, cols = np.diag_indices_from(a)
@@ -421,7 +429,7 @@ async def async_heatmap_all(selected):
 			
 		h_list[id].title.text = h_list[id].title.text.split(":")[0]
 		img_list[id] = img
-	if key_name != "nostore":
+	if key_name != "nostore" and cache_flag:
 		render_cache[key_name] = img_list
 	pool.shutdown(wait=True)
 	# print ("finished getting images")
@@ -1028,7 +1036,10 @@ for c in config_dir:
 	avail_data.append(get_config(c)["config_name"])
 
 name2config = {n:c for n,c in zip(avail_data, config_dir)}
-render_cache = LRUCache(maxsize=20)
+if cache_flag:
+	render_cache = LRUCache(maxsize=20)
+else:
+	render_cache = False
 
 mask = np.zeros((1,1))
 msg_list = ["-- Higashi-vis Log -- "]
@@ -1086,8 +1097,11 @@ data_selector = Select(title='scHi-C dataset', value=avail_data[0], options=avai
 
 
 chrom_selector = Select(title='chromosome selector', value="chr1", options=config['chrom_list'], width=150)
-
-heatmap_color_selector = Select(title='heatmap cmap', value="Reds", options=["Reds", "RdBu_r", "viridis", "cmo.curl"], width=150)
+cmap_options = ["Reds", "RdBu_r", "viridis"]
+if cmocean_flag:
+	cmap_options += ["cmo.curl"]
+	
+heatmap_color_selector = Select(title='heatmap cmap', value="Reds", options=cmap_options, width=150)
 
 reload_button = Button(label="Reload", button_type="success", width=150)
 reload_button.on_click(reload_update)
