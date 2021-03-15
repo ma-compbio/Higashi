@@ -14,6 +14,7 @@ import h5py
 import pickle
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import normalize
 import subprocess
 from fbpca import pca
 
@@ -454,15 +455,13 @@ def impute_all():
 	
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
-	# print (np.sum(temp1 > 0, axis=0))
 	mask = np.array(np.sum(temp1 > 0, axis=0) > 5)
 	mask = mask.reshape((-1))
-	# if type(temp) != np.ndarray:
-	# 	temp = np.array(temp.todense())
+
 	size = int(total_embed_size / total_chrom_size * temp.shape[-1]) + 1
-		
+
+	temp = normalize(temp, norm='l1', axis=1)
 	temp = temp[:, mask]
-	temp /= (np.sum(temp, axis=-1)+1e-15)
 	
 	U, s, Vt = pca(temp, k=size)  # Automatically centers.
 	temp1 =  np.array(U[:, :size] * s[:size])
@@ -496,7 +495,7 @@ def generate_feats(smooth_flag=False):
 		total_linear_chrom_size += int(math.sqrt(list(temp.shape)[-1]) * res_cell / 1000000)
 
 	if len(chrom_list) > 1:
-		total_embed_size = min(max(int(temp.shape[0] * 0.4), int(total_linear_chrom_size * 0.4)), int(temp.shape[0] * 1.3))
+		total_embed_size = min(max(int(temp.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)), int(temp.shape[0] * 1.3))
 	else:
 		total_embed_size = int(np.min(temp.shape) * 0.2)
 	print ("total_feats_size", total_embed_size)

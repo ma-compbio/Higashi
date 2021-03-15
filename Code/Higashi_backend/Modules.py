@@ -169,7 +169,7 @@ class TiedAutoEncoder(nn.Module):
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
 	
 	def encoder(self, input):
-		encoded_feats = self.input_dropout(input)
+		encoded_feats = input
 		for i in range(len(self.weight_list)):
 			if self.use_bias:
 				encoded_feats = F.linear(encoded_feats, self.weight_list[i], self.bias_list[i])
@@ -605,7 +605,8 @@ class Hyper_SAGNN(nn.Module):
 			attribute_dict=None,
 			cell_feats=None,
 			encoder_dynamic_nn=None,
-			encoder_static_nn=None):
+			encoder_static_nn=None,
+			chrom_num=1):
 		super().__init__()
 		
 		self.pff_classifier = PositionwiseFeedForward(
@@ -639,6 +640,7 @@ class Hyper_SAGNN(nn.Module):
 			self.cell_feats = torch.from_numpy(cell_feats).to(device)
 		self.only_distance = False
 		self.only_model = False
+		self.chrom_num = chrom_num
 	
 	def get_embedding(self, x, x_chrom, slf_attn_mask=None, non_pad_mask=None):
 		if slf_attn_mask is None:
@@ -655,7 +657,17 @@ class Hyper_SAGNN(nn.Module):
 		x = x.long()
 		sz_b, len_seq = x.shape
 		if self.attribute_dict is not None:
-			distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]), self.cell_feats[x[:, 0]]], dim=-1)
+			if not self.only_model:
+				distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]), self.cell_feats[x[:, 0]]], dim=-1)
+			else:
+				if self.cell_feats.shape[-1] == self.chrom_num:
+					cell_feats = torch.median(self.cell_feats, dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
+				else:
+					cell_feats = torch.median(self.cell_feats[:, :self.chrom_num], dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
+					batch_info = torch.zeros((len(cell_feats),  self.cell_feats.shape[-1]- self.chrom_num)).float().to(device)
+					cell_feats = torch.cat([cell_feats, batch_info], dim=-1)
+				distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]),
+				                      cell_feats], dim=-1)
 			distance_proba = self.extra_proba(distance)
 		else:
 			distance_proba = torch.zeros((len(x), 1), dtype=torch.float, device=device)
@@ -679,9 +691,7 @@ class Hyper_SAGNN(nn.Module):
 			mask_sum = torch.sum(non_pad_mask, dim=-2, keepdim=False)
 			output /= mask_sum
 			
-			# print (cell_feats)
-			if not self.only_model:
-				output = output + distance_proba
+			output = output + distance_proba
 		else:
 			return distance_proba
 		return output
