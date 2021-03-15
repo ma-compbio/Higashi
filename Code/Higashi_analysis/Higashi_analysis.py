@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from scipy.signal import argrelextrema
 cpu_num = multiprocessing.cpu_count()
-print (cpu_num)
 import scipy.sparse as sps
 from sklearn.preprocessing import QuantileTransformer
 
@@ -107,7 +106,6 @@ def vstrans(d1, d2):
 	r2k = np.sqrt(np.var(nranks_1 / nk) * np.var(nranks_2 / nk))
 	return r2k
 
-
 def global_pearson(mat1, mat2, **kwargs):
 	return np.array([pearsonr(mat1.reshape((-1)), mat2.reshape((-1)))[0]])
 
@@ -127,6 +125,8 @@ def pc1_pearson(mat1, mat2):
 
 def scc_pearson_nonzero(mat1, mat2, max_bins):
 	if max_bins < 0:
+		max_bins = int(mat1.shape[0]-1)
+	if max_bins >= int(mat1.shape[0]-1):
 		max_bins = int(mat1.shape[0] - 5)
 	
 	corr_diag = np.zeros(len(range(max_bins)))
@@ -280,8 +280,9 @@ def get_scc2(mat1, mat2, max_bins):
 	"""
 	
 	
-	if max_bins < 0:
+	if max_bins < 0 or max_bins > int(mat1.shape[0] - 5):
 		max_bins = int(mat1.shape[0] - 5)
+	
 	
 	mat1 = csr_matrix(mat1)
 	mat2 = csr_matrix(mat2)
@@ -298,20 +299,22 @@ def get_scc2(mat1, mat2, max_bins):
 			)
 			# Compute raw pearson coeff for this diag
 			# corr_diag[d] = ss.pearsonr(d1, d2)[0]
-			corr_diag[d] = pearsonr(d1, d2)[0]
+			cor = pearsonr(d1, d2)[0]
+			corr_diag[d] = cor
 			# corr_diag[d] = spearmanr(d1, d2)[0]
 		# Compute weight for this diag
 		r2k = vstrans(d1, d2)
 		weight_diag[d] = len(d1) * r2k
 	
 	corr_diag, weight_diag = corr_diag[1:], weight_diag[1:]
+	mask = ~np.isnan(corr_diag)
+	corr_diag, weight_diag = corr_diag[mask], weight_diag[mask]
 	# Normalize weights
-	weight_diag /= sum(weight_diag)
 	
+	weight_diag /= sum(weight_diag)
 	# Weighted sum of coefficients to get SCCs
 	scc = np.nansum(corr_diag * weight_diag)
-
-	return scc
+	return scc, max_bins - np.sum(mask)
 
 
 def dropcols_coo(M, idx_to_drop):
