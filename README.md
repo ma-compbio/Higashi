@@ -26,8 +26,6 @@ Please see [the wiki](https://github.com/ma-compbio/Higashi/wiki) for extensive 
 
 Higashi is constantly being updated, see [change log](https://github.com/ma-compbio/Higashi/wiki/Change-Log) for the updating history
 
-
-
 # Cite
 
 Cite our paper by
@@ -45,3 +43,8 @@ Cite our paper by
 
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/paper.png)
 
+
+
+# Contact
+
+Please contact ruochiz@andrew.cmu.edu or raise an issue in the github repo with any questions about installation or usage. 
