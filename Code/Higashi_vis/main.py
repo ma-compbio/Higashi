@@ -598,11 +598,11 @@ def float_color_update(s):
 	bar.color_mapper.high = np.max(s)
 	
 	
-def str_color_update(s):
+def str_color_update(s, new):
 	categorical_info.visible=True
 	continuous_info.visible=False
 	bar_info, count = np.unique(s, return_counts=True)
-	global blackorwhite
+	global blackorwhite, config
 	if blackorwhite == "black":
 		color1 = "#1A1C1D"
 	else:
@@ -621,18 +621,32 @@ def str_color_update(s):
 	if len(l) <= 10:
 		encoded_color = [Category10_10[xx] for xx in inv]
 	else:
-		if 'm3C' not in data_selector.value:
+		# if 'm3C' not in data_selector.value:
+		# 	Category20_20_temp = np.array(Category20_20)
+		# 	Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
+		# 	encoded_color = [Category20_20_temp[xx] for xx in inv]
+		# # else:
+		# 	# pal1 = {'L23': '#e51f4e', 'L4': '#45af4b', 'L5': '#ffe011', 'L6': '#0081cc',
+		# 	#        'Ndnf': '#ff7f35', 'Vip': '#951eb7', 'Pvalb': '#4febee',
+		# 	#        'Sst': '#ed37d9', 'Astro': '#d1f33c', 'ODC': '#f9bdbb',
+		# 	#        'OPC': '#067d81', 'MG': '#e4bcfc', 'MP': '#ab6c1e',
+		# 	#        "Endo": '#780100'}
+		#
+		# 	encoded_color = [pal1[xx] for xx in s]
+		if 'vis_palette' not in config:
 			Category20_20_temp = np.array(Category20_20)
 			Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
 			encoded_color = [Category20_20_temp[xx] for xx in inv]
 		else:
-			pal1 = {'L23': '#e51f4e', 'L4': '#45af4b', 'L5': '#ffe011', 'L6': '#0081cc',
-			       'Ndnf': '#ff7f35', 'Vip': '#951eb7', 'Pvalb': '#4febee',
-			       'Sst': '#ed37d9', 'Astro': '#d1f33c', 'ODC': '#f9bdbb',
-			       'OPC': '#067d81', 'MG': '#e4bcfc', 'MP': '#ab6c1e',
-			       "Endo": '#780100'}
-			encoded_color = [pal1[xx] for xx in s]
-	# s = list(s)
+			if new not in config['vis_palette']:
+				Category20_20_temp = np.array(Category20_20)
+				Category20_20_temp = list(Category20_20_temp[np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])]) + list(
+					Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])
+				encoded_color = [Category20_20_temp[xx] for xx in inv]
+			else:
+				pal1 = config['vis_palette'][new]
+				encoded_color = [pal1[xx] for xx in s]
+			# s = list(s)
 	# source.patch({
 	# 	'legend_info': [(slice(len(s)), s)],
 	# 	'label_info': [(slice(len(s)), s)],
@@ -659,7 +673,7 @@ def color_update(attr, old, new):
 	
 	if new == "None":
 		s = ['cell'] * cell_num
-		str_color_update(s)
+		str_color_update(s, "None")
 	elif new == "kde":
 		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 		# print (v)
@@ -690,17 +704,17 @@ def color_update(attr, old, new):
 		if s.dtype == 'int':
 			# categorical
 			s = s.astype("str")
-			str_color_update(s)
+			str_color_update(s, new)
 		elif s.dtype == '|S3':
 			s = np.asarray([sth.decode('utf8') for sth in s]).astype('str')
-			str_color_update(s)
+			str_color_update(s, new)
 			
 		elif s.dtype == 'float':
 			# continuous
 			float_color_update(s)
 		else:
 			s = s.astype('str')
-			str_color_update(s)
+			str_color_update(s, new)
 
 
 def data_update(attr, old, new):
