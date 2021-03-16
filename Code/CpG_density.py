@@ -36,7 +36,7 @@ def cal_cpg(bin_str):
 			print(str)
 			raise EOFError
 	else:
-		rate = -1
+		rate = 0.0
 	
 	
 	return rate
@@ -50,15 +50,22 @@ bin_count = 0
 chrom = ""
 write_count = 0
 bin_str = ""
+chrom_length = {}
+length = 0
 while line:
 	line = line.strip()
+	
 	if (line[0] == '>'):
 		if len(chrom) > 0:
 			output.write("%s\t%d\t%f\n" % (chrom, bin_count * args.window, cal_cpg(bin_str)))
+			# chrom_length[chrom] = length
+			# length = 0
 		chrom = line[1:]
 		bin_count = 0
+		bin_str = ""
 	else:
 		line = line.upper()
+		length += len(line)
 		if len(bin_str) + len(line) == args.window:
 			bin_str += line
 			output.write("%s\t%d\t%f\n" % (chrom, bin_count * args.window, cal_cpg(bin_str)))
@@ -82,5 +89,5 @@ while line:
 	line = f.readline()
 output.close()
 f.close()
-	
+# print (chrom_length)
 		
