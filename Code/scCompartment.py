@@ -81,7 +81,7 @@ def process_one_chrom(chrom):
 	temp_compartment_list_all = []
 	use_rows_all = []
 	
-	if split_point >= 20:
+	if split_point >= 20 * 1000000 / res:
 		slice_start_list, slice_end_list = [0, split_point], [split_point, len(bulk1)]
 	else:
 		slice_start_list, slice_end_list = [0], [len(bulk1)]
@@ -90,10 +90,11 @@ def process_one_chrom(chrom):
 		bulk1_slice = bulk1[slice_start:slice_end, :]
 		bulk1_slice = bulk1_slice[:, slice_start:slice_end]
 		use_rows = np.where(np.sum(bulk1_slice > 0, axis=-1) > 0.1 * len(bulk1_slice))[0]
-		use_rows_all.append(np.arange(slice_start, slice_end)[use_rows])
 		if len(use_rows) <= 1:
 			# print("no use", slice_start, slice_end)
 			continue
+		use_rows_all.append(np.arange(slice_start, slice_end)[use_rows])
+
 		
 		
 		# print(bulk1_slice.shape)
@@ -128,17 +129,7 @@ def process_one_chrom(chrom):
 				temp = np.zeros((size, size))
 				
 				for i in cell_list:
-					m1 *= 0.0
-					proba = np.array(impute_f["cell_%d" % i])
-					m1[xs.astype('int'), ys.astype('int')] += proba
-					m1 = m1 + m1.T
-					m1 *= mask
 					
-					m1_slice = m1[slice_start:slice_end, :]
-					m1_slice = m1_slice[:, slice_start:slice_end]
-					
-					m1_select = m1_slice[use_rows, :]
-					m1_select = m1_select[:, use_rows]
 					
 					if args.neighbor:
 						temp *= 0.0
@@ -152,12 +143,20 @@ def process_one_chrom(chrom):
 						
 						temp_select = temp_slice[use_rows, :]
 						temp_select = temp_select[:, use_rows]
-					
-						temp_select = m1_select / np.mean(m1_select) + temp_select / np.mean(m1_select)
 					else:
-						temp_select = m1_select
+						m1 *= 0.0
+						proba = np.array(impute_f["cell_%d" % i])
+						m1[xs.astype('int'), ys.astype('int')] += proba
+						m1 = m1 + m1.T
+						m1 *= mask
 						
-					temp_select = rankmatch(temp_select, bulk1_slice)
+						m1_slice = m1[slice_start:slice_end, :]
+						m1_slice = m1_slice[:, slice_start:slice_end]
+						
+						m1_select = m1_slice[use_rows, :]
+						m1_select = m1_select[:, use_rows]
+						temp_select = m1_select
+					# temp_select = rankmatch(temp_select, bulk1_slice)
 					temp_compartment = compartment(temp_select, False, model, None)
 					if reverse_flag:
 						temp_compartment = -1 * temp_compartment
@@ -177,7 +176,7 @@ def process_one_chrom(chrom):
 def process_calib_file(file_path):
 	tab = pd.read_table(file_path , sep="\t", header=None)
 	tab.columns = ['chrom', 'bin', 'value']
-	print(tab)
+	# print(tab)
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
 	tab['chrom'] = np.array(tab['chrom']).astype('str')
 	for i, chrom in enumerate(chrom_list):
@@ -186,9 +185,9 @@ def process_calib_file(file_path):
 		vec = np.zeros(size)
 		indice = (np.array(temp['bin'] / res)).astype('int')
 		v = np.array(temp['value'])
-		print(indice, v)
+		# print(chrom, vec.shape, indice, v)
 		vec[indice] = v
-		print(vec.shape)
+		
 		np.save(os.path.join(temp_dir, "%s_calib.npy" % chrom), vec)
 
 
@@ -233,7 +232,7 @@ def start_call_compartment():
 		grp.create_dataset("bulk", data=bulk_cp_all)
 		
 		sc_cp_all = np.concatenate(sc_cp_all, axis=-1)
-		for cell in trange(len(sc_cp_all)):
+		for cell in range(len(sc_cp_all)):
 			grp.create_dataset("cell_%d" % cell, data=sc_cp_all[cell])
 	output_f.close()
 	pool.shutdown(wait=True)
