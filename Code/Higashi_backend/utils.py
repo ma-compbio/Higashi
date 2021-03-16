@@ -11,7 +11,7 @@ import os
 import h5py
 import pickle
 from sklearn.linear_model import LinearRegression
-
+import scipy
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
 	return json.load(c)
@@ -176,14 +176,14 @@ def rankmatch(from_mtx, to_mtx):
 
 def linkhdf5(name, cell_id_splits, temp_dir, impute_list):
 	print("start linking hdf5 files")
-	for chrom in impute_list:
+	for chrom in tqdm(impute_list):
 		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
 		for i, ids in enumerate(cell_id_splits):
 			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
 				if i == 0:
 					f.create_dataset('coordinates', data=input_f['coordinates'])
 				
-				for cell in tqdm(ids):
+				for cell in ids:
 					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
 		f.close()
 	for chrom in impute_list:
@@ -191,7 +191,8 @@ def linkhdf5(name, cell_id_splits, temp_dir, impute_list):
 			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
 def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
-	for chrom in impute_list:
+	print ("Post processing step 1")
+	for chrom in tqdm(impute_list):
 		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
 		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
 		
@@ -202,26 +203,55 @@ def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
 				data1[...] = v
 		f1.close()
 		f2.close()
+
+def rank_match_hdf5_one_chrom(name, temp_dir, chrom):
+	f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "r+")
+	coordinates = np.array(f['coordinates']).astype('int')
+	xs, ys = coordinates[:, 0], coordinates[:, 1]
+	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
+	
+	bulk = np.array(np.sum(origin_sparse, axis=0).todense()) / len(origin_sparse)
+	values = bulk[xs, ys]
+	values_sorted = np.sort(values)
+	
+	
+	for id_ in trange(len(f.keys())-1):
+		id_ = "cell_%d" % id_
+		data = f[id_]
+		v = np.array(f[id_])
+		order = np.argsort(v)
 		
+		v[order] = values_sorted
+		data[...] = v
+	
+	background = []
+	random_choice = np.random.choice(np.arange(len(f.keys())-1), 3000, replace=True)
+	for id_ in random_choice:
+		v = np.array(f["cell_%d" % id_])
+		background.append(v)
+	background = np.stack(background, axis=0)
+	background = np.quantile(background, 0.05, axis=0)
+	
+	for id_ in trange(len(f.keys())-1):
+		id_ = "cell_%d" % id_
+		data = f[id_]
+		v = np.array(f[id_])
+		v -= background
+		v[v < 0] = 0.0
+		data[...] = v
+	f.close()
+	
+	
+	
+	
+	
 def rank_match_hdf5(name, temp_dir, chrom_list):
+	print("Post processing final step")
+	pool = ProcessPoolExecutor(max_workers=len(chrom_list))
 	for chrom in chrom_list:
-		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
-		bulk = np.array(np.sum(origin_sparse, axis=0).todense()) / len(origin_sparse)
-		
-		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "r+")
-		coordinates = np.array(f['coordinates']).astype('int')
-		xs, ys = coordinates[:, 0], coordinates[:, 1]
-		values = bulk[xs, ys]
-		values_sorted = np.sort(values)
-		# print (values_sorted)
-		for id_ in f.keys():
-			if "cell" in id_:
-				data = f[id_]
-				v = np.array(f[id_])
-				order = np.argsort(v)
-				v[order] = values_sorted
-				data[...] = v
-		f.close()
+		# rank_match_hdf5_one_chrom(name, temp_dir, chrom)
+		pool.submit(rank_match_hdf5_one_chrom, name, temp_dir, chrom)
+	pool.shutdown(wait=True)
 
 def get_neighbor(x, neighbor_mask):
 	a = np.copy(x)
