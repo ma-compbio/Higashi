@@ -5,10 +5,14 @@ import h5py
 import torch
 import torch.nn.functional as F
 from Higashi_backend.utils import get_config, generate_binpair
+from tqdm import trange, tqdm
+from scipy.sparse import csr_matrix
 
 def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_path, weighted_info=None):
+	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	config = get_config(config_path)
 	sparse_chrom_list = np.load(sparse_path, allow_pickle=True)
+	sparse_chrom_list = np.array([np.array(c) for c in sparse_chrom_list])
 	if weighted_info is not None:
 		weighted_info = np.load(weighted_info, allow_pickle=True)
 		
@@ -32,13 +36,24 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	
 	model.eval()
 	model.only_model = True
+	embedding_init = model.encode1.static_nn
+	
+	embedding_init.off_hook()
+	embedding_init.wstack = embedding_init.wstack.cpu()
+	for s in embedding_init.embeddings:
+		s.embedding = s.embedding.cpu()
+	for t in embedding_init.targets:
+		t.embedding = t.embedding.cpu()
+	torch.cuda.empty_cache()
+	print("off hook & save mem")
+	
 	with torch.no_grad():
 		try:
 			model.encode1.dynamic_nn.start_fix()
 		except:
 			print("cannot start fix")
 			pass
-	start = time.time()
+	
 	chrom2info = {}
 	big_samples = []
 	bin_ids = []
@@ -88,40 +103,90 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	
 	big_samples = np.concatenate(big_samples, axis=0)
 	big_samples_chrom = np.concatenate(big_samples_chrom, axis=0)
-	bin_ids = np.concatenate(bin_ids, axis=0)
+	# bin_ids = np.concatenate(bin_ids, axis=0)
 	chrom_info = np.concatenate(chrom_info, axis=0).astype('int')
+	start = time.time()
 	model.eval()
+	print (big_samples.shape)
 	model.only_model = True
+	
+	if weighted_info is not None:
+		weighted_adj = True
+		cell_neighbor_list, weight_dict = weighted_info[0], weighted_info[1]
+	else:
+		weighted_adj = False
+	
+	# global new_sparse_chrom_list
+	if weighted_adj:
+		new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
+		for chrom_index, chrom in enumerate(impute_list):
+			c = chrom_list.index(chrom)
+			new_cell_chrom_list = []
+			for cell in np.arange(num_list[0])+1:
+				
+				mtx = 0
+				for nbr_cell in cell_neighbor_list[cell]:
+					balance_weight = weight_dict[(nbr_cell, cell)]
+					mtx = mtx + balance_weight * sparse_chrom_list[c][nbr_cell - 1]
+				mtx = csr_matrix(mtx)
+				mtx.sum_duplicates()
+				new_cell_chrom_list.append(mtx)
+			new_cell_chrom_list = np.array(new_cell_chrom_list)
+			new_sparse_chrom_list[c] = new_cell_chrom_list
+		new_sparse_chrom_list = np.array(new_sparse_chrom_list)
+	else:
+		new_sparse_chrom_list = sparse_chrom_list
+	
 	with torch.no_grad():
+		count = 0
 		for i in range(cell_start, cell_end):
 			cell = i + 1
-			model.encode1.dynamic_nn.fix_cell(cell, chrom_info, bin_ids, sparse_chrom_list, weighted_info)
 			
+			model.encode1.dynamic_nn.fix_cell2(cell, bin_ids, new_sparse_chrom_list[:, cell-1])
 			big_samples[:, 0] = cell
-			proba = model.predict(big_samples, big_samples_chrom, verbose=False, batch_size=int(5e4),
+			proba = model.predict(big_samples, big_samples_chrom, verbose=False, batch_size=int(4e5),
 			                      activation=activation).reshape((-1))
-			# print("close")
-			# print(proba[(big_samples[:, 1] == 5 + num_list[0] + 1) & (big_samples[:, 2] <= 20 + num_list[0])])
-			# print(np.array(sparse_chrom_list[0][cell - 1][5, :20].todense()))
-			#
-			# print ("far")
-			# print (proba[(big_samples[:, 1] == 5 + num_list[0]+1) & (big_samples[:, 2] >= 150+ num_list[0])])
-			# print (np.array(sparse_chrom_list[0][cell-1][5, 150:].todense()))
 			for chrom in impute_list:
 				slice_start, slice_end, f = chrom2info[chrom]
-				f.create_dataset("cell_%d" % (i), data=proba[slice_start:slice_end])
+				f.create_dataset("cell_%d" % (cell-1), data=proba[slice_start:slice_end])
+			count += 1
 			if (i-cell_start) % 10 == 0:
-				print("Imputing %s: %d of %d, takes %.2f s" % (name, i-cell_start, cell_end-cell_start, time.time() - start))
-	
+				print("Imputing %s: %d of %d, takes %.2f s" % (name, count, cell_end-cell_start, time.time() - start))
+			
 	
 	print("finish writing, used %.2f s" % (time.time() - start))
 	model.train()
 	model.only_model = False
 	model.encode1.dynamic_nn.fix = False
+	torch.cuda.empty_cache()
+	for s in embedding_init.embeddings:
+		s.embedding = s.embedding.to(device)
+	for t in embedding_init.targets:
+		t.embedding = t.embedding.to(device)
+	embedding_init.wstack = embedding_init.wstack.to(device)
 	for chrom in chrom2info:
 		slice_start, slice_end, f = chrom2info[chrom]
 		f.close()
 
+def fetch_to_neighs(cell, nodes_chrom, bin_ids, part_sparse_chrom_list,  num_list):
+	to_neighs = []
+	bar = trange(len(nodes_chrom))
+	for c, bin_ in zip(nodes_chrom, bin_ids):
+		bar.update(1)
+		bar.refresh()
+		row = part_sparse_chrom_list[c][bin_ - 1 - int(num_list[c])]
+		
+		nbrs = row.nonzero()
+		
+		nbr_value = np.array(row.data).reshape((-1))
+		nbrs = np.array(nbrs[1]).reshape((-1)) + 1 + int(num_list[c])
+		if len(nbrs) > 0:
+			temp = [nbrs, nbr_value]
+		else:
+			temp = []
+		to_neighs.append(temp)
+	to_neighs = np.array(to_neighs, dtype='object')
+	return cell, to_neighs
 
 def get_free_gpu():
 	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')

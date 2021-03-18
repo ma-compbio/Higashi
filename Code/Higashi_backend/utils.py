@@ -37,7 +37,6 @@ def add_padding_idx(vec):
 
 
 def np2tensor_hyper(vec, dtype):
-	vec = np.asarray(vec)
 	if len(vec.shape) == 1:
 		return [torch.as_tensor(v, dtype=dtype) for v in vec]
 	else:
@@ -182,13 +181,13 @@ def linkhdf5(name, cell_id_splits, temp_dir, impute_list):
 			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
 				if i == 0:
 					f.create_dataset('coordinates', data=input_f['coordinates'])
-				
+				# print (input_f.keys(), "%s_%s_part_%d.hdf5" % (chrom, name, i))
 				for cell in ids:
 					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
 		f.close()
-	for chrom in impute_list:
-		for i in range(len(cell_id_splits)):
-			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
+	# for chrom in impute_list:
+	# 	for i in range(len(cell_id_splits)):
+	# 		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
 def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
 	print ("Post processing step 1")
@@ -273,14 +272,15 @@ def get_neighbor_mask():
 
 def remove_BE_linear(temp1, config, data_dir):
 	if "batch_id" in config:
+		temp1 = np.concatenate(temp1, axis=-1)
+
 		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
 		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
 		for i, u in enumerate(np.unique(batch_id_info)):
 			new_batch_id_info[batch_id_info == u, i] = 1
-		
 		batch_id_info = np.array(new_batch_id_info)
-		temp1 = np.concatenate(temp1, axis=-1)
 		temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+
 	
 	else:
 		temp1 = np.concatenate(temp1, axis=-1)
