@@ -295,7 +295,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 				temp.sort()
 				
 				# Not a suitable sample
-				if ((temp[2] - temp[1]) >= max_bin) or (temp[1] == temp[2]) or ((temp[2] - temp[1]) < max(min_bin, 2)):
+				if ((temp[2] - temp[1]) >= max_bin) or ((temp[2] - temp[1]) < min_bin):
 					temp = np.copy(sample)
 				
 				
@@ -374,7 +374,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 	global pair_ratio
 	no_improve = 0
 	if load_first:
-		checkpoint = torch.load(save_path)
+		checkpoint = torch.load(save_path+save_name)
 		model.load_state_dict(checkpoint['model_link'])
 	
 	valid_accus = [0]
@@ -522,10 +522,10 @@ def generate_attributes():
 
 
 	
-		
+	
 	for i, c in enumerate(chrom_list):
 		temp = np.load(os.path.join(temp_dir, "%s_bin_adj.npy" % c)).astype('float32')
-		temp /= (np.mean(temp, axis=-1, keepdims=True) + 1e-15)
+		
 		chrom = np.zeros((len(temp), len(chrom_list))).astype('float32')
 		chrom[:, i] = 1
 		list1 = [temp, chrom]
@@ -845,12 +845,13 @@ if __name__ == '__main__':
 		attribute_dict=attribute_dict,
 		cell_feats=cell_feats,
 		encoder_dynamic_nn=node_embedding_init,
-		encoder_static_nn=node_embedding_init).to(device)
+		encoder_static_nn=node_embedding_init,
+		chrom_num = len(chrom_list)).to(device)
 	
 	loss = F.binary_cross_entropy_with_logits
 	
-	# for name, param in higashi_model.named_parameters():
-	# 	print(name, param.requires_grad, param.shape)
+	for name, param in higashi_model.named_parameters():
+		print(name, param.requires_grad, param.shape)
 	
 	optimizer = torch.optim.Adam(list(higashi_model.parameters()) + list(node_embedding_init.parameters()),
 								  lr=1e-3)
@@ -934,7 +935,7 @@ if __name__ == '__main__':
 
 		# Second round, with cell dependent GNN, but no neighbors
 		if training_stage <= 2:
-			#Training Stage 2
+			# Training Stage 2
 			train(higashi_model,
 				  loss=loss,
 				  training_data_generator=training_data_generator,
@@ -964,7 +965,10 @@ if __name__ == '__main__':
 				for i in range(gpu_num-1):
 					impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
 					time.sleep(60)
-
+				impute_pool.shutdown(wait=True)
+				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
+				impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
+				
 	if impute_with_nbr_flag:
 		train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
 		valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
@@ -974,6 +978,8 @@ if __name__ == '__main__':
 		# If the gap between train and valid loss is small, we can include the cell itself in the nbr_list
 		# If the gap is large, it indicates an overfitting problem. We would just use the neiboring cells to approximate
 		nbr_mode = 0 if (train_bce_loss - valid_bce_loss) < 0.1 or valid_bce_loss > 0.1 else 1
+		if not impute_no_nbr_flag:
+			nbr_mode = 0
 		# nbr_mode = 0
 		print ("nbr_mode", nbr_mode)
 		# Training Stage 3
@@ -1038,10 +1044,7 @@ if __name__ == '__main__':
 				impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
 				impute_pool.shutdown(wait=True)
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
-				cell_id_all = np.arange(num[0])
-
-				cell_id_all = np.array_split(cell_id_all, gpu_num - 1)
-				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
+				
 
 	if impute_with_nbr_flag & impute_no_nbr_flag:
 		modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)

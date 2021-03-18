@@ -113,7 +113,7 @@ def process_one_chrom(chrom):
 		if args.calib:
 			calib = np.load(os.path.join(temp_dir, "%s_calib.npy" % chrom)).reshape((-1, 1))[slice_start:slice_end][
 				use_rows]
-			if np.mean(calib[bulk_compartment > 0]) < np.mean(calib[bulk_compartment < 0]):
+			if np.nanmean(calib[bulk_compartment > 0]) < np.nanmean(calib[bulk_compartment < 0]):
 				reverse_flag = True
 		
 		temp_compartment_list = []
@@ -156,7 +156,7 @@ def process_one_chrom(chrom):
 						m1_select = m1_slice[use_rows, :]
 						m1_select = m1_select[:, use_rows]
 						temp_select = m1_select
-					# temp_select = rankmatch(temp_select, bulk1_slice)
+					temp_select = rankmatch(temp_select, bulk1_slice)
 					temp_compartment = compartment(temp_select, False, model, None)
 					if reverse_flag:
 						temp_compartment = -1 * temp_compartment
@@ -185,6 +185,7 @@ def process_calib_file(file_path):
 		vec = np.zeros(size)
 		indice = (np.array(temp['bin'] / res)).astype('int')
 		v = np.array(temp['value'])
+		v[v == -1] = np.nan
 		# print(chrom, vec.shape, indice, v)
 		vec[indice] = v
 		

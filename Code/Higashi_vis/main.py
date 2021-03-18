@@ -698,7 +698,8 @@ def color_update(attr, old, new):
 	elif new == 'read_count':
 		global origin_sparse
 		s = np.array([a.sum() for a in origin_sparse])
-		float_color_update(np.log(s))
+		print (s, np.min(s), np.max(s))
+		float_color_update(np.log(s+1))
 	else:
 		s = np.array(color_scheme[new])
 		if s.dtype == 'int':
@@ -1199,7 +1200,7 @@ matrix_end_slider_x = Slider(title="Heatmap end: x", value=origin_sparse[0].shap
 
 matrix_start_slider_y = Slider(title="Heatmap start: y", value=0, start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
 matrix_end_slider_y = Slider(title="Heatmap end: y", value=origin_sparse[0].shape[-1], start=0, end=origin_sparse[0].shape[-1], step=1, value_throttled=2000, width=150)
-vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.99, start=0.0,end=1.0, step=0.01, value_throttled=2000, width=150)
+vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.95, start=0.0,end=1.0, step=0.01, value_throttled=2000, width=150)
 
 
 

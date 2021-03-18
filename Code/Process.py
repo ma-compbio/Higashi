@@ -107,10 +107,9 @@ def extract_table():
 	
 	if "structured" in config:
 		if config["structured"]:
-			chunksize = int(5e5)
+			chunksize = int(5e6)
 			unique, new_count = [], []
 			cell_tab = []
-			line_count = 0
 			
 			p_list = []
 			pool = ProcessPoolExecutor(max_workers=cpu_num)
@@ -135,18 +134,19 @@ def extract_table():
 						head = chunk.iloc[np.array(chunk['cell_id']) == last_cell, :]
 						cell_tab.append(tails)
 						cell_tab = pd.concat(cell_tab, axis=0).reset_index()
-						p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
+						p_list.append(pool.submit(data2triplets, cell_tab.copy(deep=True), chrom_start_end, False))
 						cell_tab = [head]
 						chunk_count += 1
-					if chunk_count > cpu_num * 1.5:
+					if chunk_count > cpu_num:
 						for p in as_completed(p_list):
 							u_, n_ = p.result()
 							unique.append(u_)
 							new_count.append(n_)
-							
+							p_list.remove(p)
+							del p
 							bar.update(n=chunksize)
+							bar.refresh()
 							chunk_count -= 1
-							break
 						
 						p_list = []
 			if len(cell_tab) != 0:
@@ -157,18 +157,17 @@ def extract_table():
 				u_, n_ = p.result()
 				unique.append(u_)
 				new_count.append(n_)
-				
 				bar.update(n=chunksize)
+				bar.refresh()
+				
 			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
 		else:
 			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
-				
 			# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 			print(data)
 			unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
 	else:
 		data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
-	
 		# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 		print (data)
 		unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
@@ -193,14 +192,18 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 		cell_adj = []
 		bin_adj = np.zeros((size, size))
 		sparse_list = []
-		for i in range(len(temp)):
-			bin_adj[temp[i, 2] - chrom_start_end[c, 0], temp[i, 3] - chrom_start_end[c, 0]] += temp_weight[i]
+		sparse_list_for_gcn = []
+		mask1 = ((temp[:, 3] - temp[:, 2]) < max_bin * 5) & ((temp[:, 3] - temp[:, 2]) > 0)
+		temp_mask = temp[mask1]
+		temp_weight_mask = temp_weight[mask1]
+		for i in range(len(temp_mask)):
+			bin_adj[temp_mask[i, 2] - chrom_start_end[c, 0], temp_mask[i, 3] - chrom_start_end[c, 0]] += temp_weight_mask[i]
 		bin_adj = bin_adj + bin_adj.T
 		bin_adj /= cell_num
 		bin_adj /= (np.mean(bin_adj, axis=-1, keepdims=True) + 1e-15)
 		
 		if pca_flag:
-			size1 = int(0.1 * len(bin_adj))
+			size1 = int(0.15 * len(bin_adj))
 			U, s, Vt = pca(bin_adj, k=size1)  # Automatically centers.
 			bin_adj = np.array(U[:, :size1] * s[:size1])
 		np.save(os.path.join(temp_dir, "%s_bin_adj.npy" % chrom_list[c]), bin_adj)
@@ -208,10 +211,7 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 		read_count = []
 		
 		sparsity_metric = []
-		if "batch_id" in config :
-			batch_id_info = fetch_batch_id(config, "batch_id")
-		elif "library_id" in config:
-			batch_id_info = fetch_batch_id(config, "library_id")
+		
 		for i in trange(cell_num):
 			mask = temp[:, 0] == i
 			temp2 = (temp[mask, 2:] - chrom_start_end[c, 0])
@@ -223,6 +223,12 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			
 			m1 = m1 + m1.T
 			sparse_list.append(m1)
+			
+			
+			mask1 = ((temp2[:, 1] - temp2[:, 0]) < max_bin * 5) & ((temp2[:, 1] - temp2[:, 0]) > 0)
+			m2 = csr_matrix((temp_weight2[mask1], (temp2[mask1, 0], temp2[mask1, 1])), shape=(size, size))
+			m2 = m2 + m2.T
+			sparse_list_for_gcn.append(m2)
 			
 			m = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(cell_size, cell_size))
 			m = m + m.T
@@ -238,29 +244,35 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 				
 		cell_adj = np.array(cell_adj)
 		
+		
+		if "batch_id" in config :
+			batch_id_info = fetch_batch_id(config, "batch_id")
+		elif "library_id" in config:
+			batch_id_info = fetch_batch_id(config, "library_id")
+			
 		if "batch_id" in config or "library_id" in config:
 			bulk = np.sum(cell_adj, axis=0) / len(cell_adj)
 			bulk_bin = []
 			for k in range(bulk.shape[0]):
 				bulk_bin.append(np.sum(bulk[k, :]) / (bulk.shape[0]))
-			
+
 			batches = np.unique(batch_id_info)
-		
-			
+
+
 			for index, b in enumerate(batches):
 				b_bin = []
 				b_c = np.sum(cell_adj[batch_id_info == b], axis=0) / np.sum(batch_id_info == b)
 				for k in range(b_c.shape[0]):
 					b_bin.append(np.sum(b_c[k, :]) / b_c.shape[0])
-					
+
 				for i in np.where(batch_id_info == b)[0]:
 					matrix = cell_adj[i]
 					new_matrix = matrix
-					
+
 					row_sums = np.sqrt(b_bin)
 					row_indices, col_indices = new_matrix.nonzero()
 					new_matrix.data /= row_sums[row_indices]
-					
+
 					cell_adj[i] = new_matrix.reshape((1, -1))
 		else:
 			for i in range(len(cell_adj)):
@@ -274,15 +286,10 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			np.save(os.path.join(temp_dir, "%s_sparsity_metric_adj.npy" % chrom_list[c]), sparsity_metric)
 		np.save(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
 		
-		new_temp = []
-		for t in sparse_list:
-			t.setdiag(0)
-			t.eliminate_zeros()
-			new_temp.append(t)
 		
 		np.save(os.path.join(temp_dir, "%s_cell_adj.npy" % chrom_list[c]), cell_adj)
-		print (np.array(read_count), np.min(read_count), np.max(read_count))
-		return read_count, np.array(new_temp), c
+		# print (np.array(read_count), np.min(read_count), np.max(read_count))
+		return read_count, np.array(sparse_list_for_gcn), c
 
 # Generate matrices for feats and baseline
 def create_matrix():
@@ -455,6 +462,7 @@ def impute_all():
 	get_free_gpu()
 	
 	print("start conv random walk (scHiCluster) as baseline")
+	# sc_list = []
 	for c in chrom_list:
 		a = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
 		# print("saving")
@@ -471,17 +479,18 @@ def impute_all():
 		else:
 			max_bin_ = max_bin
 		
-		
+		# rw_list = []
 		# Minus one because the generate_binpair function would add one in the function
 		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % c), "w") as f:
-			f.create_dataset('coordinates', data = samples)
+			# f.create_dataset('coordinates', data = samples)
 			for i, m in enumerate(tqdm(a)):
 				m = impute_gpu(np.array(m.todense()))
+				# rw_list.append(m.reshape((1, -1)))
 				v = m[samples[:, 0], samples[:, 1]]
-				
+
 				f.create_dataset("cell_%d" % (i), data=v)
-	
+				
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
 	mask = np.array(np.sum(temp1 > 0, axis=0) > 5)
@@ -670,17 +679,17 @@ print ("min bin", min_bin)
 generate_chrom_start_end()
 extract_table()
 create_matrix()
-
-
+#
+#
 optional_smooth_flag = False
 generate_feats(optional_smooth_flag)
 
 
-#
-# if "coassay" in config:
-# 	if config["coassay"]:
-# 		process_signal()
-#
-# if "random_walk" in config:
-# 	if config["random_walk"]:
-# 		impute_all()
+
+if "coassay" in config:
+	if config["coassay"]:
+		process_signal()
+
+if "random_walk" in config:
+	if config["random_walk"]:
+		impute_all()

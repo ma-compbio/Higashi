@@ -6,6 +6,7 @@ import multiprocessing
 import time
 from torch.nn.utils.rnn import pad_sequence
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import normalize
 cpu_num = multiprocessing.cpu_count()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device_ids = [0, 1]
@@ -36,9 +37,9 @@ class SparseEmbedding(nn.Module):
 		super().__init__()
 		# print("Initializing embedding, shape", embedding_weight.shape)
 		self.sparse = sparse
-		self.cpu = cpu
+		self.cpu_flag = cpu
 		
-		if self.cpu:
+		if self.cpu_flag:
 			print("CPU mode")
 			self_device = "cpu"
 		else:
@@ -68,7 +69,7 @@ class SparseEmbedding(nn.Module):
 			x = x.reshape((-1))
 			temp = np.array((self.embedding[x, :]).todense())
 			return torch.from_numpy(temp).to(device)
-		if self.cpu:
+		if self.cpu_flag:
 			temp = self.embedding[x.cpu(), :]
 			return temp.to(device)
 		else:
@@ -466,15 +467,8 @@ class MultipleEmbedding(nn.Module):
 		self.embeddings = []
 		complex_flag = False
 		for i, w in enumerate(embedding_weights):
-			try:
-				self.embeddings.append(SparseEmbedding(w, sparse))
-			except BaseException as e:
-				print("Complex Embedding Mode")
-				self.embeddings.append(w)
-				complex_flag = True
-		
-		if complex_flag:
-			self.embeddings = nn.ModuleList(self.embeddings)
+			self.embeddings.append(SparseEmbedding(w, sparse))
+
 		
 		self.targets = []
 		complex_flag = False
@@ -720,12 +714,12 @@ class Hyper_SAGNN(nn.Module):
 					o = self(x, x_chrom)
 					if activation is not None:
 						o = activation(o)
-					output.append(o.detach().cpu().numpy())
+					output.append(o.detach().cpu())
 			
-			output = np.concatenate(output, axis=0)
+			output = torch.cat(output, dim=0)
 			torch.cuda.empty_cache()
 		self.train()
-		return output
+		return output.numpy()
 
 
 # A custom position-wise MLP.
@@ -1354,8 +1348,17 @@ class MeanAggregator_with_weights(nn.Module):
 		to_feats = mask.mm(embed_matrix)
 		return to_feats
 
-
-
+	def forward_GCN(self, nodes, adj):
+		embed_matrix = self.features(nodes)
+		adj = normalize(adj, norm='l1', axis=1)
+		Acoo = adj.tocoo()
+		
+		mask = torch.sparse.FloatTensor(torch.LongTensor([Acoo.row.tolist(), Acoo.col.tolist()]),
+		                              torch.FloatTensor(Acoo.data), torch.Size([adj.shape[0], adj.shape[1]])).to(device)
+		to_feats = mask.mm(embed_matrix)
+		
+		return to_feats
+		
 class GraphSageEncoder_with_weights(nn.Module):
 	"""
 	Encodes a node's using 'convolutional' GraphSage approach
@@ -1405,77 +1408,80 @@ class GraphSageEncoder_with_weights(nn.Module):
 		ids = (torch.arange(int(self.num_list[0])) + 1).long().to(device).view(-1)
 		self.cell_feats = self.features(ids)
 	
-	# Needs to be rewrite
-	def fix_cell(self, cell, nodes_chrom, bin_id=None, sparse_chrom_list=None, weighted_info=None):
+	# Needs to be rewritez
+	def fix_cell(self, cell, bin_id=None, to_neighs=None):
 		# print (cell, nodes_chrom, bin_id)
 		self.fix = True
-		
-		if bin_id is None:
-			start = int(self.num_list[0]) + 1
-			end = int(self.num_list[-1]) + 1
-			bin_id = np.arange(start, end)
-		
-		if weighted_info is not None:
-			weighted_adj = True
-			cell_neighbor_list, weight_dict = weighted_info[0], weighted_info[1]
-		else:
-			weighted_adj = False
-		
-		magic_number = int(self.num_list[-1] + 1)
-		
-		pseudo_nodes = torch.from_numpy(cell * magic_number + bin_id).long().to(device)
-		nodes_flatten = torch.from_numpy(bin_id).long().to(device)
-
-		cell_ids = (pseudo_nodes / magic_number).long().detach().cpu().numpy()
-		bin_ids = (pseudo_nodes % magic_number).long().detach().cpu().numpy()
-		
-		
-		to_neighs = []
-		for c, cell_id, bin_ in zip(nodes_chrom, cell_ids, bin_ids):
-			if weighted_adj:
-				row = 0
-				for nbr_cell in cell_neighbor_list[cell]:
-					balance_weight = weight_dict[(nbr_cell, cell)]
-					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_ - 1 - int(self.num_list[c])]
-			else:
-				row = sparse_chrom_list[c][cell_id - 1][bin_ - 1 - int(self.num_list[c])]
+		with torch.no_grad():
+			if bin_id is None:
+				start = int(self.num_list[0]) + 1
+				end = int(self.num_list[-1]) + 1
+				bin_id = np.arange(start, end)
+			
+			
+			
+			magic_number = int(self.num_list[-1] + 1)
+			
+			pseudo_nodes = torch.from_numpy(cell * magic_number + bin_id).long().to(device)
+			nodes_flatten = torch.from_numpy(bin_id).long().to(device)
+			
+			
+			
+			
+			batch_size = 8000
+	
+			for i in range(int(math.ceil(len(nodes_flatten) / batch_size))):
+				neigh_feats = self.aggregator.forward(nodes_flatten[i * batch_size : (i+1) * batch_size],
+				                                      pseudo_nodes[i * batch_size : (i+1) * batch_size],
+													  to_neighs[i * batch_size : (i+1) * batch_size],
+													  self.num_sample)
+				self.bin_feats[nodes_flatten[i * batch_size : (i+1) * batch_size], :] = neigh_feats.detach().clone()
+			
+			tr = self.transfer_range
+			if tr > 0:
+				start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0] + 1)
+				end = np.minimum(bin_id + tr, self.start_end_dict[bin_id, 1] + 1)
 				
-			nbrs = row.nonzero()
+				to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)], dtype='object')
+				
+				neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten, pseudo_nodes,
+																	to_neighs,
+																	2 * tr + 1)
+				self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear.detach().clone()
 			
-			nbr_value = np.array(row.data).reshape((-1))
-			nbrs = np.array(nbrs[1]).reshape((-1)) + 1 + int(self.num_list[c])
-			if len(nbrs) > 0:
-				temp = [nbrs, nbr_value]
-			else:
-				temp = []
-			to_neighs.append(temp)
-		to_neighs = np.array(to_neighs, dtype='object')
-		
-		batch_size = 3000
-
-		for i in range(int(math.ceil(len(nodes_flatten) / batch_size))):
-			neigh_feats = self.aggregator.forward(nodes_flatten[i * batch_size : (i+1) * batch_size],
-			                                      pseudo_nodes[i * batch_size : (i+1) * batch_size],
-												  to_neighs[i * batch_size : (i+1) * batch_size],
-												  self.num_sample)
-			self.bin_feats[nodes_flatten[i * batch_size : (i+1) * batch_size], :] = neigh_feats.detach().clone()
-		
-		tr = self.transfer_range
-		if tr > 0:
-			start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0] + 1)
-			end = np.minimum(bin_id + tr, self.start_end_dict[bin_id, 1] + 1)
-			
-			to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)], dtype='object')
-			
-			neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten, pseudo_nodes,
-																to_neighs,
-																2 * tr + 1)
-			self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear.detach().clone()
-		
-		if not self.gcn:
-			self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten, pseudo_nodes)
+			if not self.gcn:
+				self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten, pseudo_nodes)
 	
-	
+	def fix_cell2(self, cell, bin_ids=None, sparse_matrix=None):
+		# print (cell, nodes_chrom, bin_id)
+		self.fix = True
+		with torch.no_grad():
+			
+			for chrom, bin_id in enumerate(bin_ids):
+				magic_number = int(self.num_list[-1] + 1)
+				pseudo_nodes = torch.from_numpy(cell * magic_number + bin_id).long().to(device)
+				nodes_flatten = torch.from_numpy(bin_id).long().to(device)
+				
+				
+				neigh_feats = self.aggregator.forward_GCN(nodes_flatten,
+				                                      sparse_matrix[chrom])
+				self.bin_feats[nodes_flatten] = neigh_feats.detach().clone()
+				
+				tr = self.transfer_range
+				if tr > 0:
+					start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0] + 1)
+					end = np.minimum(bin_id + tr, self.start_end_dict[bin_id, 1] + 1)
+					
+					to_neighs = np.array([list(range(s, e)) for s, e in zip(start, end)], dtype='object')
+					
+					neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten, pseudo_nodes,
+					                                                    to_neighs,
+					                                                    2 * tr + 1)
+					self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear.detach().clone()
+				
+				if not self.gcn:
+					self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten, pseudo_nodes)
+					
 	def off_hook(self):
 		try:
 			del self.off_hook_embedding
