@@ -679,8 +679,8 @@ print ("min bin", min_bin)
 generate_chrom_start_end()
 extract_table()
 create_matrix()
-#
-#
+
+
 optional_smooth_flag = False
 generate_feats(optional_smooth_flag)
 

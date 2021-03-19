@@ -12,7 +12,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	config = get_config(config_path)
 	sparse_chrom_list = np.load(sparse_path, allow_pickle=True)
-	sparse_chrom_list = np.array([np.array(c) for c in sparse_chrom_list])
+	
 	if weighted_info is not None:
 		weighted_info = np.load(weighted_info, allow_pickle=True)
 		
@@ -60,10 +60,10 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	chrom_info = []
 	big_samples_chrom = []
 	slice_start = 0
-	for chrom_index, chrom in enumerate(impute_list):
+	for chrom in impute_list:
 		j = chrom_list.index(chrom)
 		bin_ids.append(np.arange(num_list[j], num_list[j + 1]) + 1)
-		chrom_info.append(np.ones(num_list[j + 1] - num_list[j]) * chrom_index)
+		chrom_info.append(np.ones(num_list[j + 1] - num_list[j]) * j)
 		if "minimum_impute_distance" in config:
 			min_bin_ = int(config["minimum_impute_distance"] / res)
 		else:
@@ -97,7 +97,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 		to_save = np.stack([xs, ys], axis=-1)
 		f.create_dataset("coordinates", data=to_save)
 		big_samples.append(samples)
-		big_samples_chrom.append(np.ones(len(samples), dtype='int') * chrom_index)
+		big_samples_chrom.append(np.ones(len(samples), dtype='int') * j)
 		chrom2info[chrom] = [slice_start, slice_start + len(samples), f]
 		slice_start += len(samples)
 	
@@ -116,20 +116,19 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	else:
 		weighted_adj = False
 	
-	# global new_sparse_chrom_list
+	
 	if weighted_adj:
+		print ("processing neighboring info")
 		new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
-		for chrom_index, chrom in enumerate(impute_list):
+		for chrom in impute_list:
 			c = chrom_list.index(chrom)
 			new_cell_chrom_list = []
 			for cell in np.arange(num_list[0])+1:
-				
 				mtx = 0
 				for nbr_cell in cell_neighbor_list[cell]:
 					balance_weight = weight_dict[(nbr_cell, cell)]
 					mtx = mtx + balance_weight * sparse_chrom_list[c][nbr_cell - 1]
-				mtx = csr_matrix(mtx)
-				mtx.sum_duplicates()
+
 				new_cell_chrom_list.append(mtx)
 			new_cell_chrom_list = np.array(new_cell_chrom_list)
 			new_sparse_chrom_list[c] = new_cell_chrom_list
@@ -141,7 +140,6 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 		count = 0
 		for i in range(cell_start, cell_end):
 			cell = i + 1
-			
 			model.encode1.dynamic_nn.fix_cell2(cell, bin_ids, new_sparse_chrom_list[:, cell-1])
 			big_samples[:, 0] = cell
 			proba = model.predict(big_samples, big_samples_chrom, verbose=False, batch_size=int(4e5),
@@ -170,10 +168,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 
 def fetch_to_neighs(cell, nodes_chrom, bin_ids, part_sparse_chrom_list,  num_list):
 	to_neighs = []
-	bar = trange(len(nodes_chrom))
 	for c, bin_ in zip(nodes_chrom, bin_ids):
-		bar.update(1)
-		bar.refresh()
 		row = part_sparse_chrom_list[c][bin_ - 1 - int(num_list[c])]
 		
 		nbrs = row.nonzero()
