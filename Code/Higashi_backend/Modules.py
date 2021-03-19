@@ -643,7 +643,7 @@ class Hyper_SAGNN(nn.Module):
 			
 		dynamic, static, attn = self.encode1(x, x, x_chrom, slf_attn_mask, non_pad_mask)
 		if torch.sum(torch.isnan(dynamic)) > 0:
-			print (x, dynamic, static)
+			print ("nan error", x, dynamic, static)
 			
 		return dynamic, static, attn
 	
@@ -1465,6 +1465,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 				
 				neigh_feats = self.aggregator.forward_GCN(nodes_flatten,
 				                                      sparse_matrix[chrom])
+				
 				self.bin_feats[nodes_flatten] = neigh_feats.detach().clone()
 				
 				tr = self.transfer_range

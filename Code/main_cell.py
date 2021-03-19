@@ -525,7 +525,6 @@ def generate_attributes():
 	
 	for i, c in enumerate(chrom_list):
 		temp = np.load(os.path.join(temp_dir, "%s_bin_adj.npy" % c)).astype('float32')
-		
 		chrom = np.zeros((len(temp), len(chrom_list))).astype('float32')
 		chrom[:, i] = 1
 		list1 = [temp, chrom]
@@ -964,7 +963,7 @@ if __name__ == '__main__':
 				cell_id_all = np.array_split(cell_id_all, gpu_num-1)
 				for i in range(gpu_num-1):
 					impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"))
-					time.sleep(60)
+					time.sleep(10)
 				impute_pool.shutdown(wait=True)
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
 				impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)

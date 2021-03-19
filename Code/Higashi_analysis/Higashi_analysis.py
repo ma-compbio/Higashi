@@ -173,8 +173,7 @@ def scc_spearman_nonzero(mat1, mat2, max_bins):
 		else:
 			with warnings.catch_warnings():
 				warnings.filterwarnings(
-					"ignore", category=SpearmanRConstantInputWarning
-				)
+					"ignore", category=SpearmanRConstantInputWarning)
 				# Compute raw pearson coeff for this diag
 				# corr_diag[d] = ss.pearsonr(d1, d2)[0]
 				corr_diag[d] = spearmanr(d1, d2)[0]
