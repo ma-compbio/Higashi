@@ -272,7 +272,8 @@ def get_neighbor_mask():
 
 def remove_BE_linear(temp1, config, data_dir):
 	if "batch_id" in config:
-		temp1 = np.concatenate(temp1, axis=-1)
+		if type(temp1) is list:
+			temp1 = np.concatenate(temp1, axis=-1)
 
 		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
 		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
@@ -283,7 +284,8 @@ def remove_BE_linear(temp1, config, data_dir):
 
 	
 	else:
-		temp1 = np.concatenate(temp1, axis=-1)
+		if type(temp1) is list:
+			temp1 = np.concatenate(temp1, axis=-1)
 
 	
 	return temp1
