@@ -193,7 +193,8 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 		bin_adj = np.zeros((size, size))
 		sparse_list = []
 		sparse_list_for_gcn = []
-		mask1 = ((temp[:, 3] - temp[:, 2]) < max_bin * 5) & ((temp[:, 3] - temp[:, 2]) > 0)
+		# mask1 = ((temp[:, 3] - temp[:, 2]) < max_bin * 5) & ((temp[:, 3] - temp[:, 2]) > 0)
+		mask1 = ((temp[:, 3] - temp[:, 2]) > 0)
 		temp_mask = temp[mask1]
 		temp_weight_mask = temp_weight[mask1]
 		for i in range(len(temp_mask)):
@@ -225,7 +226,8 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			sparse_list.append(m1)
 			
 			
-			mask1 = ((temp2[:, 1] - temp2[:, 0]) < max_bin * 5) & ((temp2[:, 1] - temp2[:, 0]) > 0)
+			# mask1 = ((temp2[:, 1] - temp2[:, 0]) < max_bin * 5) & ((temp2[:, 1] - temp2[:, 0]) > 0)
+			mask1 = ((temp2[:, 1] - temp2[:, 0]) > 0)
 			m2 = csr_matrix((temp_weight2[mask1], (temp2[mask1, 0], temp2[mask1, 1])), shape=(size, size))
 			m2 = m2 + m2.T
 			sparse_list_for_gcn.append(m2)
@@ -421,7 +423,7 @@ def random_walk_gpu(A, rp, epochs=60):
 		Q_new = (1 - rp) * I + rp * torch.mm(Q, P)
 		delta = torch.norm(Q - Q_new, 2)
 		Q = Q_new
-		if delta < 1e-6:
+		if delta < 1e-2:
 			break
 	Q = Q - torch.diag(torch.diag(Q))
 	return Q
@@ -463,7 +465,7 @@ def impute_all():
 	
 	print("start conv random walk (scHiCluster) as baseline")
 	# sc_list = []
-	for c in chrom_list:
+	for c in impute_list:
 		a = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
 		# print("saving")
 		if "minimum_impute_distance" in config:
@@ -483,13 +485,15 @@ def impute_all():
 		# Minus one because the generate_binpair function would add one in the function
 		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % c), "w") as f:
-			# f.create_dataset('coordinates', data = samples)
+			f.create_dataset('coordinates', data = samples)
 			for i, m in enumerate(tqdm(a)):
 				m = impute_gpu(np.array(m.todense()))
 				# rw_list.append(m.reshape((1, -1)))
 				v = m[samples[:, 0], samples[:, 1]]
 
 				f.create_dataset("cell_%d" % (i), data=v)
+				
+				
 				
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp1,temp, total_embed_size, total_chrom_size, c):
@@ -625,6 +629,7 @@ args = parse_args()
 
 config = get_config(args.config)
 chrom_list = config['chrom_list']
+impute_list = config['impute_list']
 res = config['resolution']
 res_cell = config['resolution_cell']
 scale_factor = int(res_cell / res)
