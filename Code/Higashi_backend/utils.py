@@ -173,37 +173,48 @@ def rankmatch(from_mtx, to_mtx):
 	return temp2.reshape((len(from_mtx), -1))
 
 
-def linkhdf5(name, cell_id_splits, temp_dir, impute_list):
+def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir):
+	f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
+	
+	bar = trange(len(np.concatenate(cell_id_splits)))
+	for i, ids in enumerate(cell_id_splits):
+		with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
+			if i == 0:
+				f.create_dataset('coordinates', data=input_f['coordinates'])
+			# print (input_f.keys(), "%s_%s_part_%d.hdf5" % (chrom, name, i))
+			for cell in ids:
+				v = np.array(input_f["cell_%d" % (cell)])
+				
+				f.create_dataset('cell_%d' % cell, data=v)
+				bar.update(1)
+				bar.refresh()
+	f.close()
+
+def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 	print("start linking hdf5 files")
+	pool = ProcessPoolExecutor(max_workers=len(impute_list))
 	for chrom in tqdm(impute_list):
-		f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
-		for i, ids in enumerate(cell_id_splits):
-			with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
-				if i == 0:
-					f.create_dataset('coordinates', data=input_f['coordinates'])
-				# print (input_f.keys(), "%s_%s_part_%d.hdf5" % (chrom, name, i))
-				for cell in ids:
-					f.create_dataset('cell_%d' % cell, data=input_f["cell_%d" % (cell)])
-		f.close()
+		pool.submit(linkhdf5_one_chrom, chrom, name, cell_id_splits, temp_dir, impute_list, name2)
+	pool.shutdown(wait=True)
 	# for chrom in impute_list:
 	# 	for i in range(len(cell_id_splits)):
 	# 		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
 def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
-	print ("Post processing step 1")
+	print ("Post processing final step")
 	for chrom in tqdm(impute_list):
 		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
 		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
 		
 		for id_ in f1.keys():
 			if "cell" in id_:
-				data1 = f2[id_]
+				data2 = f2[id_]
 				v = np.array(f2[id_]) + np.array(f1[id_])
-				data1[...] = v
+				data2[...] = v
 		f1.close()
 		f2.close()
 
-def rank_match_hdf5_one_chrom(name, temp_dir, chrom):
+def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 	f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "r+")
 	coordinates = np.array(f['coordinates']).astype('int')
 	xs, ys = coordinates[:, 0], coordinates[:, 1]
@@ -211,8 +222,38 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom):
 	
 	bulk = np.array(np.sum(origin_sparse, axis=0).todense()) / len(origin_sparse)
 	values = bulk[xs, ys]
-	values_sorted = np.sort(values)
 	
+	max_distance = config['maximum_distance']
+	res = config['resolution']
+	if max_distance > 0:
+		max_bin = int(max_distance / res)
+		
+		length = len(values)
+		nonzerosum = np.sum(values > 1e-15)
+		final_values = [values[values > 1e-15]]
+		
+		if (np.sum(bulk > 1e-15) / length) > 1:
+			k = max_bin + 1
+			while nonzerosum < length:
+				v = np.diag(bulk, k)
+				final_values.append(v[v > 1e-15])
+				nonzerosum += np.sum(v > 1e-15)
+				k += 1
+				
+				if k == (origin_sparse[0].shape[0]):
+					break
+					
+			final_values = np.concatenate(final_values, axis=0)
+			if len(final_values) > length:
+				values = final_values[:length]
+			else:
+				values = np.concatenate([final_values, final_values, np.zeros([length - len(final_values)])])[:length]
+		else:
+			values = np.sort(bulk.reshape((-1)))[::-1][:length]
+	
+	
+	values_sorted = np.sort(values)
+	print ("sorted", values_sorted, np.sum(values_sorted > 1e-15) / len(values_sorted), np.sum(bulk > 1e-15) / len(values_sorted))
 	
 	for id_ in trange(len(f.keys())-1):
 		id_ = "cell_%d" % id_
@@ -224,18 +265,18 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom):
 		data[...] = v
 	
 	background = []
-	random_choice = np.random.choice(np.arange(len(f.keys())-1), 3000, replace=True)
+	random_choice = np.random.choice(np.arange(len(f.keys())-1), min(1000,len(f.keys())-1), replace=True)
 	for id_ in random_choice:
 		v = np.array(f["cell_%d" % id_])
 		background.append(v)
 	background = np.stack(background, axis=0)
-	background = np.quantile(background, 0.05, axis=0)
-	
+	bg = np.quantile(background, 0.01, axis=0)
+	del background
 	for id_ in trange(len(f.keys())-1):
 		id_ = "cell_%d" % id_
 		data = f[id_]
 		v = np.array(f[id_])
-		v -= background
+		v -= bg
 		v[v < 0] = 0.0
 		data[...] = v
 	f.close()
@@ -244,12 +285,12 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom):
 	
 	
 	
-def rank_match_hdf5(name, temp_dir, chrom_list):
-	print("Post processing final step")
+def rank_match_hdf5(name, temp_dir, chrom_list, config):
+	print("Post processing step 1")
 	pool = ProcessPoolExecutor(max_workers=len(chrom_list))
 	for chrom in chrom_list:
-		# rank_match_hdf5_one_chrom(name, temp_dir, chrom)
-		pool.submit(rank_match_hdf5_one_chrom, name, temp_dir, chrom)
+		# rank_match_hdf5_one_chrom(name, temp_dir, chrom, config)
+		pool.submit(rank_match_hdf5_one_chrom, name, temp_dir, chrom, config)
 	pool.shutdown(wait=True)
 
 def get_neighbor(x, neighbor_mask):
