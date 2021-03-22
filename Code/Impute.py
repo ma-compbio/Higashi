@@ -135,7 +135,8 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 		new_sparse_chrom_list = np.array(new_sparse_chrom_list)
 	else:
 		new_sparse_chrom_list = sparse_chrom_list
-	
+	new_sparse_chrom_list = np.array(new_sparse_chrom_list)
+	print (new_sparse_chrom_list.shape)
 	with torch.no_grad():
 		count = 0
 		for i in range(cell_start, cell_end):
