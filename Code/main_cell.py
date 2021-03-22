@@ -223,12 +223,9 @@ def eval_epoch(model, loss_func, validation_data_generator):
 
 
 def check_nonzero(x, c):
-	# minus 1 because add padding index
-	if len(neighbor_mask) > 1:
-		dim = sparse_chrom_list[c][x[0]-1].shape[-1]
-		return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
-	else:
-		return sparse_chrom_list[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
+	# minus 1 because add padding indexå
+	dim = sparse_chrom_list[c][x[0]-1].shape[-1]
+	return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
 
 	
 def generate_negative_cpu(x, x_chrom, forward=True):
@@ -340,12 +337,8 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 		bin_ids = x[:, 1:].reshape((-1))
 		nodes_chrom = np.stack([x_chrom, x_chrom], axis=-1).reshape((-1))
 		to_neighs = []
+		
 		for c, cell_id, bin_id in zip(nodes_chrom, cell_ids, bin_ids):
-			# if weighted_adj:
-			# 	row = 0
-			# 	for nbr_cell in cell_neighbor_list[cell_id]:
-			# 		balance_weight = weight_dict[(nbr_cell, cell_id)]
-			# else:
 			row = new_sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
 			
 			
@@ -645,6 +638,7 @@ def mp_impute(config_path, path, name, mode, cell_start, cell_end, sparse_path, 
 
 	
 if __name__ == '__main__':
+	
 	# Get parameters from config file
 	args = parse_args()
 	config = get_config(args.config)
@@ -748,7 +742,8 @@ if __name__ == '__main__':
 	if "correct_be_impute" in config:
 		if config['correct_be_impute']:
 			remove_be_flag = True
-			
+	
+	# All above are just loading parameters from the config file
 	
 	#Training related parameters, but these are hard coded as they usually don't require tuning
 	# collect_num=x means, one cpu thread would collect x batches of samples
@@ -758,6 +753,7 @@ if __name__ == '__main__':
 	
 	batch_size = 96
 	
+	# Getting how many nodes are there for each node type
 	num = np.load(os.path.join(temp_dir, "num.npy"))
 	num_list = np.cumsum(num)
 	cell_num = num[0]
@@ -794,9 +790,11 @@ if __name__ == '__main__':
 	sparsity = len(data) / total_possible
 	
 	
-	# cell_read_count = np.median(np.load(os.path.join(temp_dir, "cell_read_count.npy")))
+	
 	total_sparsity_cell = np.load(os.path.join(temp_dir, "sparsity.npy"))
 	print ("total_sparsity_cell", np.median(total_sparsity_cell), sparsity)
+	# Trust the original cell feature more if there are more non-zero entries for faster convergence.
+	# If there are more than 95% zero entries at 1Mb, then rely more on Higashi non-linear transformation
 	if np.median(total_sparsity_cell) >= 0.05:
 		contractive_flag = True
 		contractive_loss_weight = 1e-3
@@ -804,9 +802,7 @@ if __name__ == '__main__':
 		contractive_flag = False
 		contractive_loss_weight = 0.0
 	
-	
-	neighbor_mask = get_neighbor_mask()
-	
+	# Dependes on the sparsity, change the number of negative samples
 	if sparsity > 0.3:
 		neg_num = 1
 	elif sparsity > 0.2:
@@ -817,11 +813,10 @@ if __name__ == '__main__':
 		neg_num = 4
 	else:
 		neg_num = 5
-		
-	# print("neg_num", neg_num)
 	batch_size *= (1 + neg_num)
 	
-	# print("weight", weight, np.min(weight), np.max(weight))
+	
+	
 	weight += 1
 	# if mode == 'rank':
 	# 	weight = KBinsDiscretizer(n_bins=50, encode='ordinal', strategy='quantile').fit_transform(
@@ -852,11 +847,7 @@ if __name__ == '__main__':
 	start_end_dict = np.load(os.path.join(temp_dir, "start_end_dict.npy"))
 	start_end_dict = np.concatenate([np.zeros((1, 2)), start_end_dict], axis=0).astype('int')
 	
-	
-	# print("start_end_dict", start_end_dict.shape, start_end_dict)
-	
-	# print(train_data, test_data)
-	
+	# Generate features, batch effects related features, etc.
 	cell_feats = np.load(os.path.join(temp_dir, "cell_feats.npy")).astype('float32')
 	if "batch_id" in config or "library_id" in config:
 		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
@@ -875,14 +866,11 @@ if __name__ == '__main__':
 	# print ("cell_feats", cell_feats)
 	embeddings_initial, attribute_dict, targets_initial = generate_attributes()
 	# print ("attribute_dict.shape", attribute_dict.shape, cell_feats.shape)
-
 	
 	
-	
-	compress = False
-	initial_set = set()
 	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
 	new_sparse_chrom_list = sparse_chrom_list
+	
 	if mode == 'classification':
 		train_weight_mean = np.mean(train_weight)
 		
@@ -997,18 +985,19 @@ if __name__ == '__main__':
 	if impute_no_nbr_flag or impute_with_nbr_flag:
 
 		# Second round, with cell dependent GNN, but no neighbors
-		if training_stage <= 2:
-			# Training Stage 2
-			train(higashi_model,
-				  loss=loss,
-				  training_data_generator=training_data_generator,
-				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=no_nbr_epoch,
-				  load_first=False, save_embed=False)
-			checkpoint = {
-					'model_link': higashi_model.state_dict()}
-
-			torch.save(checkpoint, save_path + "_stage2")
+		# if training_stage <= 2:
+		# 	# Training Stage 2
+		# 	print("Second stage training")
+		# 	train(higashi_model,
+		# 		  loss=loss,
+		# 		  training_data_generator=training_data_generator,
+		# 		  validation_data_generator=validation_data_generator,
+		# 		  optimizer=[optimizer], epochs=no_nbr_epoch,
+		# 		  load_first=False, save_embed=False)
+		# 	checkpoint = {
+		# 			'model_link': higashi_model.state_dict()}
+		#
+		# 	torch.save(checkpoint, save_path + "_stage2")
 
 		# Loading Stage 2
 		checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
@@ -1110,17 +1099,18 @@ if __name__ == '__main__':
 
 		optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
 
-		if training_stage <= 3:
-			train(higashi_model,
-				  loss=loss,
-				  training_data_generator=training_data_generator,
-				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=with_nbr_epoch,  load_first=False)
-
-			checkpoint = {
-				'model_link': higashi_model.state_dict()}
-
-			torch.save(checkpoint, save_path+"_stage3")
+		# if training_stage <= 3:
+		# 	print("Final stage training")
+		# 	train(higashi_model,
+		# 		  loss=loss,
+		# 		  training_data_generator=training_data_generator,
+		# 		  validation_data_generator=validation_data_generator,
+		# 		  optimizer=[optimizer], epochs=with_nbr_epoch,  load_first=False)
+		#
+		# 	checkpoint = {
+		# 		'model_link': higashi_model.state_dict()}
+		#
+		# 	torch.save(checkpoint, save_path+"_stage3")
 
 		# Loading Stage 3
 		checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
@@ -1155,7 +1145,8 @@ if __name__ == '__main__':
 				impute_pool.shutdown(wait=True)
 				
 				extra_str = "%s_nbr_%d_impute" % (embedding_name, 1) if (impute_no_nbr_flag and nbr_mode == 1 and not remove_be_flag) else None
-				# When the 1nb imputation is there and nbr_mode=1 (itself is not included during learning)
+				
+				# When the 1nb imputation is there and nbr_mode=1 (itself is not included during learning), add the predicted values with only 1nb to the neighbor version.
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list, extra_str)
 
 
