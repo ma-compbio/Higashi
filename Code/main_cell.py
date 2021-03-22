@@ -985,19 +985,19 @@ if __name__ == '__main__':
 	if impute_no_nbr_flag or impute_with_nbr_flag:
 
 		# Second round, with cell dependent GNN, but no neighbors
-		if training_stage <= 2:
-			# Training Stage 2
-			print("Second stage training")
-			train(higashi_model,
-				  loss=loss,
-				  training_data_generator=training_data_generator,
-				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=no_nbr_epoch,
-				  load_first=False, save_embed=False)
-			checkpoint = {
-					'model_link': higashi_model.state_dict()}
-
-			torch.save(checkpoint, save_path + "_stage2")
+		# if training_stage <= 2:
+		# 	# Training Stage 2
+		# 	print("Second stage training")
+		# 	train(higashi_model,
+		# 		  loss=loss,
+		# 		  training_data_generator=training_data_generator,
+		# 		  validation_data_generator=validation_data_generator,
+		# 		  optimizer=[optimizer], epochs=no_nbr_epoch,
+		# 		  load_first=False, save_embed=False)
+		# 	checkpoint = {
+		# 			'model_link': higashi_model.state_dict()}
+		#
+		# 	torch.save(checkpoint, save_path + "_stage2")
 
 		# Loading Stage 2
 		checkpoint = torch.load(save_path + "_stage2", map_location=current_device)
@@ -1055,13 +1055,6 @@ if __name__ == '__main__':
 		weight_dict = {}
 		print (cell_neighbor_list[:10], cell_neighbor_weight_list[:10])
 		
-		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
-		label = np.array(label_info["cell type"])
-		for i in range(len(cell_neighbor_list)-1):
-			cell = i+1
-			print (label[i], label[cell_neighbor_list[cell]-1])
-		
-		
 		for i in trange(len(cell_neighbor_list)):
 			for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
 				weight_dict[(c, i)] = w
@@ -1099,18 +1092,18 @@ if __name__ == '__main__':
 
 		optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
 
-		if training_stage <= 3:
-			print("Final stage training")
-			train(higashi_model,
-				  loss=loss,
-				  training_data_generator=training_data_generator,
-				  validation_data_generator=validation_data_generator,
-				  optimizer=[optimizer], epochs=with_nbr_epoch,  load_first=False)
-
-			checkpoint = {
-				'model_link': higashi_model.state_dict()}
-
-			torch.save(checkpoint, save_path+"_stage3")
+		# if training_stage <= 3:
+		# 	print("Final stage training")
+		# 	train(higashi_model,
+		# 		  loss=loss,
+		# 		  training_data_generator=training_data_generator,
+		# 		  validation_data_generator=validation_data_generator,
+		# 		  optimizer=[optimizer], epochs=with_nbr_epoch,  load_first=False)
+		#
+		# 	checkpoint = {
+		# 		'model_link': higashi_model.state_dict()}
+		#
+		# 	torch.save(checkpoint, save_path+"_stage3")
 
 		# Loading Stage 3
 		checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
