@@ -280,7 +280,7 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 		v = np.array(f["cell_%d" % id_])
 		background.append(v)
 	background = np.stack(background, axis=0)
-	bg = np.quantile(background, 0.001, axis=0)
+	bg = np.quantile(background, 0.01, axis=0)
 	del background
 	for id_ in trange(len(f.keys())-1):
 		id_ = "cell_%d" % id_
