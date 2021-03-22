@@ -119,8 +119,8 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	
 	if weighted_adj:
 		print ("processing neighboring info")
-		new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
-		for chrom in impute_list:
+		new_sparse_chrom_list = [[] for i in range(len(impute_list))]
+		for chrom_index_in_impute, chrom in enumerate(impute_list):
 			c = chrom_list.index(chrom)
 			new_cell_chrom_list = []
 			for cell in np.arange(num_list[0])+1:
@@ -131,12 +131,15 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 
 				new_cell_chrom_list.append(mtx)
 			new_cell_chrom_list = np.array(new_cell_chrom_list)
-			new_sparse_chrom_list[c] = new_cell_chrom_list
+			new_sparse_chrom_list[chrom_index_in_impute] = new_cell_chrom_list
 		new_sparse_chrom_list = np.array(new_sparse_chrom_list)
 	else:
-		new_sparse_chrom_list = sparse_chrom_list
-	new_sparse_chrom_list = np.array(new_sparse_chrom_list)
-	print (new_sparse_chrom_list.shape)
+		new_sparse_chrom_list = [[] for i in range(len(impute_list))]
+		for chrom_index_in_impute, chrom in enumerate(impute_list):
+			c = chrom_list.index(chrom)
+			new_sparse_chrom_list[chrom_index_in_impute] = sparse_chrom_list[c]
+		new_sparse_chrom_list = np.array(new_sparse_chrom_list)
+	print(new_sparse_chrom_list.shape)
 	with torch.no_grad():
 		count = 0
 		for i in range(cell_start, cell_end):
