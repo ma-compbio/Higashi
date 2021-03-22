@@ -173,9 +173,10 @@ def rankmatch(from_mtx, to_mtx):
 	return temp2.reshape((len(from_mtx), -1))
 
 
-def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir):
+def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir, impute_list, name2=None):
 	f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "w")
-	
+	if name2 is not None:
+		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r")
 	bar = trange(len(np.concatenate(cell_id_splits)))
 	for i, ids in enumerate(cell_id_splits):
 		with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
@@ -183,12 +184,18 @@ def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir):
 				f.create_dataset('coordinates', data=input_f['coordinates'])
 			# print (input_f.keys(), "%s_%s_part_%d.hdf5" % (chrom, name, i))
 			for cell in ids:
-				v = np.array(input_f["cell_%d" % (cell)])
-				
+				v1 = np.array(input_f["cell_%d" % (cell)])
+				if name2 is not None:
+					v2 = np.array(f1["cell_%d" % (cell)])
+					v = v1 / np.mean(v1) + v2 / np.mean(v2)
+				else:
+					v = v1 / np.mean(v1)
 				f.create_dataset('cell_%d' % cell, data=v)
 				bar.update(1)
 				bar.refresh()
 	f.close()
+	if name2 is not None:
+		f1.close()
 
 def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 	print("start linking hdf5 files")
@@ -200,8 +207,9 @@ def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 	# 	for i in range(len(cell_id_splits)):
 	# 		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
-def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
-	print ("Post processing final step")
+def modify_nbr_hdf5(name1, name2, temp_dir, impute_list, config):
+	print ("Post processing step 1")
+	neighbor = config['neighbor_num']
 	for chrom in tqdm(impute_list):
 		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
 		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
@@ -209,7 +217,7 @@ def modify_nbr_hdf5(name1, name2, temp_dir, impute_list):
 		for id_ in f1.keys():
 			if "cell" in id_:
 				data2 = f2[id_]
-				v = np.array(f2[id_]) + np.array(f1[id_])
+				v = (np.array(f2[id_]) + np.array(f1[id_])) / neighbor
 				data2[...] = v
 		f1.close()
 		f2.close()
@@ -225,6 +233,7 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 	
 	max_distance = config['maximum_distance']
 	res = config['resolution']
+	
 	if max_distance > 0:
 		max_bin = int(max_distance / res)
 		
@@ -242,7 +251,8 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 				
 				if k == (origin_sparse[0].shape[0]):
 					break
-					
+				# print (nonzerosum)
+				
 			final_values = np.concatenate(final_values, axis=0)
 			if len(final_values) > length:
 				values = final_values[:length]
@@ -270,7 +280,7 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 		v = np.array(f["cell_%d" % id_])
 		background.append(v)
 	background = np.stack(background, axis=0)
-	bg = np.quantile(background, 0.01, axis=0)
+	bg = np.quantile(background, 0.001, axis=0)
 	del background
 	for id_ in trange(len(f.keys())-1):
 		id_ = "cell_%d" % id_
@@ -279,17 +289,15 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 		v -= bg
 		v[v < 0] = 0.0
 		data[...] = v
+	
 	f.close()
 	
 	
 	
-	
-	
 def rank_match_hdf5(name, temp_dir, chrom_list, config):
-	print("Post processing step 1")
+	print("Post processing final step")
 	pool = ProcessPoolExecutor(max_workers=len(chrom_list))
 	for chrom in chrom_list:
-		# rank_match_hdf5_one_chrom(name, temp_dir, chrom, config)
 		pool.submit(rank_match_hdf5_one_chrom, name, temp_dir, chrom, config)
 	pool.shutdown(wait=True)
 

@@ -333,9 +333,6 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 	
 	index = np.random.permutation(len(x))
 	x, y, w, x_chrom = x[index], y[index], w[index], x_chrom[index]
-	
-	
-		
 		
 	
 	if isinstance(higashi_model.encode1.dynamic_nn, GraphSageEncoder_with_weights):
@@ -344,13 +341,12 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 		nodes_chrom = np.stack([x_chrom, x_chrom], axis=-1).reshape((-1))
 		to_neighs = []
 		for c, cell_id, bin_id in zip(nodes_chrom, cell_ids, bin_ids):
-			if weighted_adj:
-				row = 0
-				for nbr_cell in cell_neighbor_list[cell_id]:
-					balance_weight = weight_dict[(nbr_cell, cell_id)]
-					row = row + balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
-			else:
-				row = sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
+			# if weighted_adj:
+			# 	row = 0
+			# 	for nbr_cell in cell_neighbor_list[cell_id]:
+			# 		balance_weight = weight_dict[(nbr_cell, cell_id)]
+			# else:
+			row = new_sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
 			
 			
 			nbrs = row.nonzero()
@@ -358,12 +354,20 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight):
 			nbr_value = np.array(
 				row.data).reshape((-1))
 			nbrs = np.array(nbrs[1]).reshape((-1)) + 1 + num_list[c]
+			
+
+			if type(nbrs) is not np.ndarray:
+				print (row, nbrs)
 			if len(nbrs) > 0:
 				temp = [nbrs, nbr_value]
 			else:
 				temp = []
 			to_neighs.append(temp)
-		to_neighs = np.array(to_neighs).reshape((-1, 2))
+		# Force to append an empty list and remove it, such that np.array won't broadcasting shapes
+		to_neighs.append([])
+		to_neighs = np.array(to_neighs)[:-1]
+		to_neighs = np.array(to_neighs, dtype='object').reshape((len(x), 2))
+		
 	else:
 		to_neighs = x_chrom
 	
@@ -550,12 +554,67 @@ def generate_attributes():
 	return embeddings, attribute_dict, targets
 
 
+def get_cell_neighbor_be(start=1):
+	# save_embeddings(higashi_model, True)
+	v = np.load(os.path.join(temp_dir, "%s_0_origin.npy" % embedding_name))
+	
+	
+	distance = pairwise_distances(v, metric='euclidean')
+	distance_sorted = np.sort(distance, axis=-1)
+	distance /= np.quantile(distance_sorted[:, 1:neighbor_num].reshape((-1)), q=0.25)
+	# distance /= np.mean(distance)
+	cell_neighbor_list = [[] for i in range(num[0] + 1)]
+	cell_neighbor_weight_list = [[] for i in range(num[0] + 1)]
+	if "batch_id" in config:
+		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
+		label = np.array(label_info[config["batch_id"]])
+		batches = np.unique(label)
+		equal_num = int(math.ceil(neighbor_num / (len(batches))))
+		
+		indexs = [np.where(label == b)[0] for b in batches]
+		
+		for i, d in enumerate(tqdm(distance)):
+			neighbor  = []
+			weight = []
+			b_this = label[i]
+			for j in range(len(batches)):
+				neighbor.append(indexs[j][np.argsort(d[indexs[j]])][:equal_num])
+				weight.append(d[neighbor[-1]])
+				
+			weight = [w/np.mean(w) for w in weight]
+			neighbor = np.concatenate(neighbor)
+			weight = np.concatenate(weight)
+			
+			neighbor = neighbor[np.argsort(weight)]
+			weight = np.sort(weight)
+			
+			index = np.random.permutation(len(neighbor)-1)
+			neighbor[1:] = neighbor[1:][index]
+			weight[1:] = weight[1:][index]
+			neighbor = neighbor[:neighbor_num]
+			weight = weight[:neighbor_num]
+			# neighbor = neighbor[index][:neighbor_num]
+			# weight = weight[index][:neighbor_num]
+			neighbor = neighbor[np.argsort(weight)]
+			weight = np.sort(weight)
+
+		
+			new_w = np.exp(-weight[start:])
+			new_w /= np.sum(new_w)
+			# new_w[0] = 0.0
+			cell_neighbor_list[i + 1] = (neighbor + 1)[start:]
+			cell_neighbor_weight_list[i + 1] = (new_w)
+	# cell_neighbor_weight_list[i + 1] /= np.sum(cell_neighbor_weight_list[i + 1])
+	
+	return np.array(cell_neighbor_list), np.array(cell_neighbor_weight_list)
+
+
 def get_cell_neighbor(start=1):
 	# save_embeddings(higashi_model, True)
 	v = np.load(os.path.join(temp_dir, "%s_0_origin.npy" % embedding_name))
 	distance = pairwise_distances(v, metric='euclidean')
 	distance_sorted = np.sort(distance, axis=-1)
-	distance /= np.quantile(distance_sorted[:, 1:neighbor_num].reshape((-1)), q=0.5)
+	distance /= np.quantile(distance_sorted[:, 1:neighbor_num].reshape((-1)), q=0.25)
 	# distance /= np.mean(distance)
 	cell_neighbor_list = [[] for i in range(num[0] + 1)]
 	cell_neighbor_weight_list = [[] for i in range(num[0] + 1)]
@@ -566,11 +625,11 @@ def get_cell_neighbor(start=1):
 		neighbor_new = neighbor
 		new_w = weight
 		
-		new_w = np.exp(-new_w)
+		new_w = np.exp(-new_w[start:])
 		new_w /= np.sum(new_w)
 		# new_w[0] = 0.0
 		cell_neighbor_list[i + 1] = (neighbor_new + 1)[start:]
-		cell_neighbor_weight_list[i + 1] = (new_w)[start:]
+		cell_neighbor_weight_list[i + 1] = (new_w)
 		# cell_neighbor_weight_list[i + 1] /= np.sum(cell_neighbor_weight_list[i + 1])
 	
 	
@@ -685,6 +744,11 @@ if __name__ == '__main__':
 	else:
 		with_nbr_epoch = 30
 	
+	remove_be_flag = False
+	if "correct_be_impute" in config:
+		if config['correct_be_impute']:
+			remove_be_flag = True
+			
 	
 	#Training related parameters, but these are hard coded as they usually don't require tuning
 	# collect_num=x means, one cpu thread would collect x batches of samples
@@ -818,7 +882,7 @@ if __name__ == '__main__':
 	compress = False
 	initial_set = set()
 	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
-	
+	new_sparse_chrom_list = sparse_chrom_list
 	if mode == 'classification':
 		train_weight_mean = np.mean(train_weight)
 		
@@ -927,7 +991,7 @@ if __name__ == '__main__':
 													pass_remove=False).to(device)
 
 	higashi_model.encode1.dynamic_nn = node_embedding2
-	optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
+	optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
 
 
 	if impute_no_nbr_flag or impute_with_nbr_flag:
@@ -966,32 +1030,70 @@ if __name__ == '__main__':
 					time.sleep(10)
 				impute_pool.shutdown(wait=True)
 				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 1), cell_id_all, temp_dir, impute_list)
+				# Rank match is to make sure the distribution of predicted values match real population Hi-C values.
+				
 				impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
 				
 	if impute_with_nbr_flag:
 		train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
+		update_num_per_eval_epoch = 100
 		valid_bce_loss, _, _, _= eval_epoch(higashi_model, loss, validation_data_generator)
+		update_num_per_eval_epoch = 10
 
 		print ("train_loss", train_bce_loss, "test_loss", valid_bce_loss)
-
+		
+		
+		# nbr_mode = 1, the neighbors excludes the cell itself
+		# nbr_mode = 0, the neighbors includes the cell itself
 		# If the gap between train and valid loss is small, we can include the cell itself in the nbr_list
-		# If the gap is large, it indicates an overfitting problem. We would just use the neiboring cells to approximate
-		nbr_mode = 0 if (train_bce_loss - valid_bce_loss) < 0.1 or valid_bce_loss > 0.1 else 1
+		# If the gap is large, it indicates an overfitting problem. We would just use the neighboring cells to approximate and add things later
+		# Also, if the valid loss is too small, it also indicates overfitting, only use neighbors as well
+		nbr_mode = 1 if (train_bce_loss - valid_bce_loss) > 0.1 or valid_bce_loss < 0.1 else 0
 		if not impute_no_nbr_flag:
 			nbr_mode = 0
-		# nbr_mode = 0
+		if remove_be_flag:
+			nbr_mode = 0
+		
 		print ("nbr_mode", nbr_mode)
 		# Training Stage 3
 		print ("getting cell nbr's nbr list")
-		cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
+		
+		if remove_be_flag:
+			cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor_be(nbr_mode)
+		else:
+			cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
 
 		weight_dict = {}
-
+		print (cell_neighbor_list[:10], cell_neighbor_weight_list[:10])
+		
+		label_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))
+		label = np.array(label_info["cell type"])
+		for i in range(len(cell_neighbor_list)-1):
+			cell = i+1
+			print (label[i], label[cell_neighbor_list[cell]-1])
+		
+		
 		for i in trange(len(cell_neighbor_list)):
 			for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
 				weight_dict[(c, i)] = w
 		weighted_adj = True
-
+		
+		print("processing neighboring info")
+		new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
+		for c, chrom in enumerate(chrom_list):
+			new_cell_chrom_list = []
+			for cell in np.arange(num_list[0]) + 1:
+				mtx = 0
+				for nbr_cell in cell_neighbor_list[cell]:
+					balance_weight = weight_dict[(nbr_cell, cell)]
+					mtx = mtx + balance_weight * sparse_chrom_list[c][nbr_cell - 1]
+				
+				new_cell_chrom_list.append(mtx)
+			new_cell_chrom_list = np.array(new_cell_chrom_list)
+			new_sparse_chrom_list[c] = new_cell_chrom_list
+		new_sparse_chrom_list = np.array(new_sparse_chrom_list)
+		
+		
 
 
 		np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list, weight_dict]), allow_pickle=True)
@@ -1006,7 +1108,7 @@ if __name__ == '__main__':
 		#
 		# higashi_model.encode1.dynamic_nn = node_embedding1
 
-		optimizer = torch.optim.AdamW(higashi_model.parameters(), lr=1e-3, weight_decay=0.01)
+		optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
 
 		if training_stage <= 3:
 			train(higashi_model,
@@ -1024,31 +1126,40 @@ if __name__ == '__main__':
 		checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
 		higashi_model.load_state_dict(checkpoint['model_link'])
 		node_embedding_init.off_hook()
+		
+		train_bce_loss, _, _, _, _ = train_epoch(higashi_model, loss, validation_data_generator, [optimizer])
+		update_num_per_eval_epoch = 100
+		valid_bce_loss, _, _, _ = eval_epoch(higashi_model, loss, validation_data_generator)
+		update_num_per_eval_epoch = 10
+		
+		print("train_loss", train_bce_loss, "test_loss", valid_bce_loss)
+		
+		# raise EOFError
 
 		del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight, training_data_generator, validation_data_generator
 		del sparse_chrom_list, weight_dict
+		
 		# Impute Stage 3
-
+		
 		if impute_with_nbr_flag:
 			if non_para_impute:
 				impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
 			else:
 				torch.save(higashi_model, save_path + "_stage3_model")
 				cell_id_all = np.arange(num[0])
-				# print (cell_id_all)
 				cell_id_all = np.array_split(cell_id_all, gpu_num)
 				for i in range(gpu_num-1):
 					impute_pool.submit(mp_impute, args.config, save_path + "_stage3_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
 					time.sleep(60)
 				impute_process(args.config, higashi_model,  "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num, i+1), mode, np.min(cell_id_all[i+1]), np.max(cell_id_all[i+1]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
 				impute_pool.shutdown(wait=True)
-				linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list)
 				
+				extra_str = "%s_nbr_%d_impute" % (embedding_name, 1) if (impute_no_nbr_flag and nbr_mode == 1 and not remove_be_flag) else None
+				# When the 1nb imputation is there and nbr_mode=1 (itself is not included during learning)
+				linkhdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), cell_id_all, temp_dir, impute_list, extra_str)
 
-	if impute_with_nbr_flag & impute_no_nbr_flag:
-		modify_nbr_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), "%s_nbr_%d_impute"  % (embedding_name, neighbor_num), temp_dir, impute_list)
-	# Rank match is to make sure the distribution of predicted values match real population Hi-C values.
-	if impute_no_nbr_flag:
-		rank_match_hdf5("%s_nbr_%d_impute"  % (embedding_name, 1), temp_dir, impute_list)
-	if impute_with_nbr_flag:
-		rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list)
+
+			rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, neighbor_num), temp_dir, impute_list, config)
+
+		if impute_no_nbr_flag:
+			rank_match_hdf5("%s_nbr_%d_impute" % (embedding_name, 1), temp_dir, impute_list, config)
