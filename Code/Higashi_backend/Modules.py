@@ -1291,6 +1291,7 @@ class MeanAggregator_with_weights(nn.Module):
 			w = samp_neigh[1]
 			samp_neigh = samp_neigh[0]
 			
+			
 			if self.remove and self.training:
 				if remove_list is not None:
 					mask = samp_neigh != remove_list[i]
@@ -1304,22 +1305,26 @@ class MeanAggregator_with_weights(nn.Module):
 			# print (w, samp_neigh)
 			w /= np.sum(w)
 			
-			for n in samp_neigh:
-				
-				if not pass_remove:
-					if n not in unique_nodes:
-						unique_nodes[n] = count
-						unique_nodes_list.append(n)
-						count += 1
-					column_indices.append(unique_nodes[n])
-				else:
-					unique_nodes_list.append(n)
-					column_indices.append(count)
-					new_remove_list.append(remove_list[i])
+			try:
+				for n in samp_neigh:
 					
-					count += 1
-				
-				row_indices.append(i)
+					if not pass_remove:
+						if n not in unique_nodes:
+							unique_nodes[n] = count
+							unique_nodes_list.append(n)
+							count += 1
+						column_indices.append(unique_nodes[n])
+					else:
+						unique_nodes_list.append(n)
+						column_indices.append(count)
+						new_remove_list.append(remove_list[i])
+						
+						count += 1
+					
+					row_indices.append(i)
+			except:
+				print (i, samp_neigh, samp_neighs[i])
+				raise EOFError
 				
 			v.append(w)
 			

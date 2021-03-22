@@ -14,7 +14,7 @@ import argparse
 def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi single cell compartment calling")
 	parser.add_argument('-c', '--config', type=str, default="../config_dir/config_Ren_221.JSON")
-	parser.add_argument('-n', '--neighbor', type=bool, default=True)
+	parser.add_argument('-n', '--neighbor', default=False, action='store_true')
 	parser.add_argument('--calib_file', type=str, default="./calib.bed")
 	parser.add_argument('--calib', action='store_true')
 	return parser.parse_args()
@@ -242,6 +242,7 @@ def start_call_compartment():
 
 
 args = parse_args()
+print (args)
 config = get_config(args.config)
 res = config['resolution']
 data_dir = config['data_dir']
