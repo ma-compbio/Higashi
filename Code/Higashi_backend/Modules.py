@@ -136,7 +136,7 @@ class TiedAutoEncoder(nn.Module):
 		else:
 			self.layer_norm = None
 		self.tied_list = tied_list
-		self.input_dropout = nn.Dropout(0.2)
+		self.input_dropout = nn.Dropout(0.1)
 	
 	def reset_parameters(self):
 		for i, w in enumerate(self.weight_list):
@@ -170,7 +170,7 @@ class TiedAutoEncoder(nn.Module):
 			torch.nn.init.uniform_(self.recon_bias_list[i], -bound, bound)
 	
 	def encoder(self, input):
-		encoded_feats = input
+		encoded_feats = self.input_dropout(input)
 		for i in range(len(self.weight_list)):
 			if self.use_bias:
 				encoded_feats = F.linear(encoded_feats, self.weight_list[i], self.bias_list[i])
@@ -653,16 +653,19 @@ class Hyper_SAGNN(nn.Module):
 		if self.attribute_dict is not None:
 			if not self.only_model:
 				distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]), self.cell_feats[x[:, 0]]], dim=-1)
+				distance_proba = self.extra_proba(distance)
 			else:
-				if self.cell_feats.shape[-1] == self.chrom_num:
-					cell_feats = torch.median(self.cell_feats, dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
-				else:
-					cell_feats = torch.median(self.cell_feats[:, :self.chrom_num], dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
-					batch_info = torch.zeros((len(cell_feats),  self.cell_feats.shape[-1]- self.chrom_num)).float().to(device)
-					cell_feats = torch.cat([cell_feats, batch_info], dim=-1)
-				distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]),
-				                      cell_feats], dim=-1)
-			distance_proba = self.extra_proba(distance)
+				distance_proba = torch.zeros((len(x), 1), dtype=torch.float, device=device)
+			# 	if self.cell_feats.shape[-1] == self.chrom_num:
+			# 		cell_feats = torch.median(self.cell_feats, dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
+			# 	else:
+			# 		cell_feats = torch.median(self.cell_feats[:, :self.chrom_num], dim=0)[0].view(1, -1) * torch.ones((len(x), self.chrom_num)).float().to(device)
+			# 		batch_info = torch.zeros((len(cell_feats),  self.cell_feats.shape[-1]- self.chrom_num)).float().to(device)
+			# 		cell_feats = torch.cat([cell_feats, batch_info], dim=-1)
+			# 	distance = torch.cat([self.attribute_dict_embedding(x[:, 1]), self.attribute_dict_embedding(x[:, 2]),
+			# 	                      cell_feats], dim=-1)
+			# distance_proba = self.extra_proba(distance)
+			
 		else:
 			distance_proba = torch.zeros((len(x), 1), dtype=torch.float, device=device)
 		

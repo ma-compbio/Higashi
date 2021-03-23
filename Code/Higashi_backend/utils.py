@@ -265,7 +265,9 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 	values_sorted = np.sort(values)
 	print ("sorted", values_sorted, np.sum(values_sorted > 1e-15) / len(values_sorted), np.sum(bulk > 1e-15) / len(values_sorted))
 	
-	for id_ in trange(len(f.keys())-1):
+	bar = trange((len(f.keys())-1) * 2)
+	for id_ in range((len(f.keys())-1)):
+		bar.update(1)
 		id_ = "cell_%d" % id_
 		data = f[id_]
 		v = np.array(f[id_])
@@ -282,7 +284,8 @@ def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
 	background = np.stack(background, axis=0)
 	bg = np.quantile(background, 0.01, axis=0)
 	del background
-	for id_ in trange(len(f.keys())-1):
+	for id_ in range((len(f.keys())-1)):
+		bar.update(1)
 		id_ = "cell_%d" % id_
 		data = f[id_]
 		v = np.array(f[id_])
