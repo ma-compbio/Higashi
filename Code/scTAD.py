@@ -16,7 +16,7 @@ import seaborn as sns
 def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi single cell TAD calling")
 	parser.add_argument('-c', '--config', type=str, default="../config_dir/config_Ren_TAD.JSON")
-	parser.add_argument('-n', '--neighbor', type=bool, default=True)
+	parser.add_argument('-n', '--neighbor', default=False, action='store_true')
 	parser.add_argument('--window_ins', type=int, default=1000000)
 	parser.add_argument('--window_tad', type=int, default=500000)
 	
