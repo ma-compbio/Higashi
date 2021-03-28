@@ -162,9 +162,9 @@ def process_one_chrom(chrom):
 			temp_compartment_list_all[j].append(temp_compartment.reshape((-1)))
 	for j in range(len(slice_start_list)):
 		temp_compartment_list_all[j] = np.stack(temp_compartment_list_all[j], axis=0)
-		temp_compartment_list_all[j] = zscore(temp_compartment_list_all[j], axis=1)
-	# temp_compartment_list = quantile_transform(temp_compartment_list, output_distribution='uniform',
-	#                                            n_quantiles=int(temp_compartment_list.shape[-1] * 1.0), axis=1)
+		# temp_compartment_list_all[j] = zscore(temp_compartment_list_all[j], axis=1)
+		temp_compartment_list_all[j] = quantile_transform(temp_compartment_list_all[j], output_distribution='uniform',
+		                                           n_quantiles=int(temp_compartment_list_all[j].shape[-1] * 1.0), axis=1)
 
 	# print(bulk_compartment.shape, temp_compartment_list.shape)
 	
