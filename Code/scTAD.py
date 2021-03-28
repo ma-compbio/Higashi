@@ -79,46 +79,38 @@ def gen_tad_and_calibrate(chrom):
 	sc_border = []
 	sc_border_indice = []
 	
-	with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r") as impute_f:
-		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
-		               "r") as impute_f2:
-			coordinates = impute_f['coordinates']
-			xs, ys = coordinates[:, 0], coordinates[:, 1]
-			
-			cell_list = trange(len(list(impute_f.keys())) - 1)
-			m1 = np.zeros((size, size))
-			temp = np.zeros((size, size))
-			for i in cell_list:
-				m1 *= 0.0
-				temp *= 0.0
-				
-				proba = np.array(impute_f["cell_%d" % i])
-				m1[xs.astype('int'), ys.astype('int')] += proba
-				m1 = m1 + m1.T
-				m1 = sqrt_norm(m1)
-				
-				
-				if args.neighbor:
-					proba = np.array(impute_f2["cell_%d" % i])
-					temp[xs.astype('int'), ys.astype('int')] += proba
-					temp = temp + temp.T
-					temp = sqrt_norm(temp)
-					temp = m1 + temp
-				else:
-					temp = m1
-					
-				temp *= mask
-				
-				bulk1 += temp
-				
-				score = insulation_score(temp, windowsize=args.window_ins, res=res)
-				score[discard_rows] = 1.0
-				border = call_tads(score, windowsize=args.window_tad, res=res)
-				sc_score.append(score)
-				sc_border_indice.append(border)
-				temp1 = np.zeros_like(score)
-				temp1[border] = 1
-				sc_border.append(temp1)
+	if args.neighbor:
+		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
+		               "r")
+	else:
+		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r")
+		
+	coordinates = impute_f['coordinates']
+	xs, ys = coordinates[:, 0], coordinates[:, 1]
+	
+	cell_list = trange(len(list(impute_f.keys())) - 1)
+	m1 = np.zeros((size, size))
+	for i in cell_list:
+		m1 *= 0.0
+		
+		proba = np.array(impute_f["cell_%d" % i])
+		m1[xs.astype('int'), ys.astype('int')] += proba
+		m1 = m1 + m1.T
+		m1 = sqrt_norm(m1)
+		temp = m1
+		
+		temp *= mask
+		
+		bulk1 += temp
+		
+		score = insulation_score(temp, windowsize=args.window_ins, res=res)
+		score[discard_rows] = 1.0
+		border = call_tads(score, windowsize=args.window_tad, res=res)
+		sc_score.append(score)
+		sc_border_indice.append(border)
+		temp1 = np.zeros_like(score)
+		temp1[border] = 1
+		sc_border.append(temp1)
 	
 	sc_score = np.array(sc_score)
 	sc_border_indice = np.array(sc_border_indice)
@@ -138,7 +130,7 @@ def gen_tad_and_calibrate(chrom):
 		np.copy(sc_border_indice),
 		bulk_tad_b)
 	print("finish %s" % chrom)
-	
+
 	calibrated_sc_border = []
 	for cb in calibrated_sc_boundaries:
 		temp = np.zeros_like(score)

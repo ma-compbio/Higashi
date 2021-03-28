@@ -77,14 +77,20 @@ def process_one_chrom(chrom):
 	mask = (np.ones_like(bulk1) - mask)
 	bulk1 *= mask
 	
-	bulk_compartment_all = []
-	temp_compartment_list_all = []
+	
 	use_rows_all = []
 	
 	if split_point >= 20 * 1000000 / res:
 		slice_start_list, slice_end_list = [0, split_point], [split_point, len(bulk1)]
 	else:
 		slice_start_list, slice_end_list = [0], [len(bulk1)]
+	
+	bulk_compartment_all = []
+	temp_compartment_list_all = [[] for i in range(len(slice_start_list))]
+	bulk_model_list = []
+	bulk_reverse_list = []
+	bulk_slice_list = []
+	use_rows_list = []
 	for slice_start, slice_end in zip(slice_start_list, slice_end_list):
 		
 		bulk1_slice = bulk1[slice_start:slice_end, :]
@@ -94,13 +100,11 @@ def process_one_chrom(chrom):
 			# print("no use", slice_start, slice_end)
 			continue
 		use_rows_all.append(np.arange(slice_start, slice_end)[use_rows])
-
-		
-		
-		# print(bulk1_slice.shape)
+		use_rows_list.append(use_rows)
 		bulk1_slice = bulk1_slice[use_rows, :]
 		bulk1_slice = bulk1_slice[:, use_rows]
-		# print(bulk1_slice.shape)
+		
+		bulk_slice_list.append(bulk1_slice)
 		bulk_expect = []
 		for k in range(len(bulk1_slice)):
 			diag = np.diag(bulk1_slice, k)
@@ -113,63 +117,63 @@ def process_one_chrom(chrom):
 		if args.calib:
 			calib = np.load(os.path.join(temp_dir, "%s_calib.npy" % chrom)).reshape((-1, 1))[slice_start:slice_end][
 				use_rows]
-			if np.nanmean(calib[bulk_compartment > 0]) < np.nanmean(calib[bulk_compartment < 0]):
+			print ("average cpg", np.nanmean(calib[bulk_compartment > np.quantile(bulk_compartment,0.9)]), np.nanmean(calib[bulk_compartment < np.quantile(bulk_compartment,0.1)]))
+			if np.nanmean(calib[bulk_compartment > np.quantile(bulk_compartment,0.9)]) < np.nanmean(calib[bulk_compartment < np.quantile(bulk_compartment,0.1)]):
 				reverse_flag = True
-		
-		temp_compartment_list = []
-		
-		
-		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r") as impute_f:
-			with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
-			               "r") as impute_f2:
-				coordinates = impute_f['coordinates']
-				xs, ys = coordinates[:, 0], coordinates[:, 1]
-				cell_list = trange(len(list(impute_f.keys())) - 1)
-				m1 = np.zeros((size, size))
-				temp = np.zeros((size, size))
-				
-				for i in cell_list:
-					
-					
-					if args.neighbor:
-						temp *= 0.0
-						proba = np.array(impute_f2["cell_%d" % i])
-						temp[xs.astype('int'), ys.astype('int')] += proba
-						temp = temp + temp.T
-						temp *= mask
-						
-						temp_slice = temp[slice_start:slice_end, :]
-						temp_slice = temp_slice[:, slice_start:slice_end]
-						
-						temp_select = temp_slice[use_rows, :]
-						temp_select = temp_select[:, use_rows]
-					else:
-						m1 *= 0.0
-						proba = np.array(impute_f["cell_%d" % i])
-						m1[xs.astype('int'), ys.astype('int')] += proba
-						m1 = m1 + m1.T
-						m1 *= mask
-						
-						m1_slice = m1[slice_start:slice_end, :]
-						m1_slice = m1_slice[:, slice_start:slice_end]
-						
-						m1_select = m1_slice[use_rows, :]
-						m1_select = m1_select[:, use_rows]
-						temp_select = m1_select
-					temp_select = rankmatch(temp_select, bulk1_slice)
-					temp_compartment = compartment(temp_select, False, model, None)
-					if reverse_flag:
-						temp_compartment = -1 * temp_compartment
-					temp_compartment_list.append(temp_compartment.reshape((-1)))
-		temp_compartment_list = np.stack(temp_compartment_list, axis=0)
-		temp_compartment_list = quantile_transform(temp_compartment_list, output_distribution='uniform',
-		                                           n_quantiles=int(temp_compartment_list.shape[-1] * 1.0), axis=1)
+			if reverse_flag:
+				bulk_compartment *= -1
 		bulk_compartment_all.append(bulk_compartment)
-		temp_compartment_list_all.append(temp_compartment_list)
-		# print(bulk_compartment.shape, temp_compartment_list.shape)
+		bulk_reverse_list.append(reverse_flag)
+		bulk_model_list.append(model)
+		
+		
+	
+		
+	if args.neighbor:
+		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
+		               "r")
+	else:
+		impute_f =  h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)),
+		               "r")
+		
+	coordinates = impute_f['coordinates']
+	xs, ys = coordinates[:, 0], coordinates[:, 1]
+	cell_list = trange(len(list(impute_f.keys())) - 1)
+	temp = np.zeros((size, size))
+	
+	for i in cell_list:
+		temp *= 0.0
+		proba = np.array(impute_f["cell_%d" % i])
+		temp[xs.astype('int'), ys.astype('int')] += proba
+		temp = temp + temp.T
+		temp *= mask
+		
+		for j in range(len(slice_start_list)):
+			slice_start, slice_end = slice_start_list[j], slice_end_list[j]
+			temp_slice = temp[slice_start:slice_end, :]
+			temp_slice = temp_slice[:, slice_start:slice_end]
+			
+			temp_select = temp_slice[use_rows_list[j], :]
+			temp_select = temp_select[:, use_rows_list[j]]
+			temp_select = rankmatch(temp_select, bulk_slice_list[j])
+			temp_compartment = compartment(temp_select, False, bulk_model_list[j], None)
+			if bulk_reverse_list[j]:
+				temp_compartment = -1 * temp_compartment
+			temp_compartment_list_all[j].append(temp_compartment.reshape((-1)))
+	for j in range(len(slice_start_list)):
+		temp_compartment_list_all[j] = np.stack(temp_compartment_list_all[j], axis=0)
+		temp_compartment_list_all[j] = zscore(temp_compartment_list_all[j], axis=1)
+	# temp_compartment_list = quantile_transform(temp_compartment_list, output_distribution='uniform',
+	#                                            n_quantiles=int(temp_compartment_list.shape[-1] * 1.0), axis=1)
+
+	# print(bulk_compartment.shape, temp_compartment_list.shape)
+	
+	
+	
 	bulk_compartment = np.concatenate(bulk_compartment_all, axis=0)
 	temp_compartment_list = np.concatenate(temp_compartment_list_all, axis=-1)
 	use_rows = np.concatenate(use_rows_all, axis=0)
+	print (chrom, "finished")
 	return bulk_compartment, temp_compartment_list, chrom, use_rows, size
 
 
@@ -192,16 +196,14 @@ def process_calib_file(file_path):
 		np.save(os.path.join(temp_dir, "%s_calib.npy" % chrom), vec)
 
 
-
 def start_call_compartment():
 	p_list = []
-	pool = ProcessPoolExecutor(max_workers=25)
+	pool = ProcessPoolExecutor(max_workers=3)
 	with h5py.File(os.path.join(temp_dir, "scCompartment.hdf5"), "w") as output_f:
 		for chrom in chrom_list:
 			p_list.append(pool.submit(process_one_chrom, chrom))
 		
 		result = {}
-		
 		for p in as_completed(p_list):
 			bulk_compartment, temp_compartment_list, chrom, use_rows, size = p.result()
 			result[chrom] = [bulk_compartment, temp_compartment_list, use_rows, size]
