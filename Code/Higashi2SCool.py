@@ -11,7 +11,7 @@ def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi visualization tool")
 	parser.add_argument('-c', '--config', type=str, default="")
 	parser.add_argument('-o', '--output', default="./output.scool")
-	parser.add_argument('-n', '--neighbor', type=bool, default=True)
+	parser.add_argument('-n', '--neighbor', default=False, action='store_true')
 	
 	
 	return parser.parse_args()
