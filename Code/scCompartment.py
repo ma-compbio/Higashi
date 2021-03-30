@@ -91,6 +91,9 @@ def process_one_chrom(chrom):
 	bulk_reverse_list = []
 	bulk_slice_list = []
 	use_rows_list = []
+	temp_compartment_list_zscore = []
+	temp_compartment_list_quantile = []
+	
 	for slice_start, slice_end in zip(slice_start_list, slice_end_list):
 		
 		bulk1_slice = bulk1[slice_start:slice_end, :]
@@ -162,9 +165,10 @@ def process_one_chrom(chrom):
 			temp_compartment_list_all[j].append(temp_compartment.reshape((-1)))
 	for j in range(len(slice_start_list)):
 		temp_compartment_list_all[j] = np.stack(temp_compartment_list_all[j], axis=0)
-		# temp_compartment_list_all[j] = zscore(temp_compartment_list_all[j], axis=1)
-		temp_compartment_list_all[j] = quantile_transform(temp_compartment_list_all[j], output_distribution='uniform',
-		                                           n_quantiles=int(temp_compartment_list_all[j].shape[-1] * 1.0), axis=1)
+		temp_compartment_list_quantile.append(quantile_transform(temp_compartment_list_all[j], output_distribution='uniform',
+		                                           n_quantiles=int(temp_compartment_list_all[j].shape[-1] * 1.0), axis=1))
+		
+		temp_compartment_list_zscore.append(zscore(temp_compartment_list_all[j], axis=1))
 
 	# print(bulk_compartment.shape, temp_compartment_list.shape)
 	
@@ -172,9 +176,11 @@ def process_one_chrom(chrom):
 	
 	bulk_compartment = np.concatenate(bulk_compartment_all, axis=0)
 	temp_compartment_list = np.concatenate(temp_compartment_list_all, axis=-1)
+	temp_compartment_list_zscore = np.concatenate(temp_compartment_list_zscore, axis=-1)
+	temp_compartment_list_quantile = np.concatenate(temp_compartment_list_quantile, axis=-1)
 	use_rows = np.concatenate(use_rows_all, axis=0)
 	print (chrom, "finished")
-	return bulk_compartment, temp_compartment_list, chrom, use_rows, size
+	return bulk_compartment, temp_compartment_list, temp_compartment_list_zscore, temp_compartment_list_quantile, chrom, use_rows, size
 
 
 def process_calib_file(file_path):
@@ -198,33 +204,37 @@ def process_calib_file(file_path):
 
 def start_call_compartment():
 	p_list = []
-	pool = ProcessPoolExecutor(max_workers=3)
+	pool = ProcessPoolExecutor(max_workers=10)
 	with h5py.File(os.path.join(temp_dir, "scCompartment.hdf5"), "w") as output_f:
 		for chrom in chrom_list:
 			p_list.append(pool.submit(process_one_chrom, chrom))
 		
 		result = {}
 		for p in as_completed(p_list):
-			bulk_compartment, temp_compartment_list, chrom, use_rows, size = p.result()
-			result[chrom] = [bulk_compartment, temp_compartment_list, use_rows, size]
+			bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = p.result()
+			result[chrom] = [bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size]
 			
 		bin_chrom_list = []
 		bin_start_list = []
 		bin_end_list = []
 		bulk_cp_all = []
 		sc_cp_all = []
+		sc_cp_raw = []
+		sc_cp_zscore = []
 		grp = output_f.create_group('compartment')
 		bin = grp.create_group('bin')
 		
 		for chrom in chrom_list:
-			bulk_compartment, temp_compartment_list, use_rows, size = result[chrom]
+			bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size = result[chrom]
 			# print (use_rows)
 			length = size
 			bin_chrom_list += [chrom] * len(use_rows)
 			bin_start_list.append((np.arange(length) * res).astype('int')[use_rows])
 			bin_end_list.append(((np.arange(length) + 1) * res).astype('int')[use_rows])
 			bulk_cp_all.append(bulk_compartment)
-			sc_cp_all.append(temp_compartment_list)
+			sc_cp_all.append(temp_compartment_quantile)
+			sc_cp_raw.append(temp_compartment_list)
+			sc_cp_zscore.append(temp_compartment_zscore)
 			
 		bin.create_dataset('chrom', data=[l.encode('utf8') for l in bin_chrom_list],
 		                   dtype=h5py.special_dtype(vlen=str))
@@ -235,8 +245,29 @@ def start_call_compartment():
 		grp.create_dataset("bulk", data=bulk_cp_all)
 		
 		sc_cp_all = np.concatenate(sc_cp_all, axis=-1)
+		sc_cp_raw = np.concatenate(sc_cp_raw, axis=-1)
+		sc_cp_zscore = np.concatenate(sc_cp_zscore, axis=-1)
+		
 		for cell in range(len(sc_cp_all)):
 			grp.create_dataset("cell_%d" % cell, data=sc_cp_all[cell])
+		
+		grp = output_f.create_group('compartment_raw')
+		bin = grp.create_group('bin')
+		bin.create_dataset('chrom', data=[l.encode('utf8') for l in bin_chrom_list],
+		                   dtype=h5py.special_dtype(vlen=str))
+		bin.create_dataset('start', data=np.concatenate(bin_start_list))
+		bin.create_dataset('end', data=np.concatenate(bin_end_list))
+		for cell in range(len(sc_cp_all)):
+			grp.create_dataset("cell_%d" % cell, data=sc_cp_raw[cell])
+		
+		grp = output_f.create_group('compartment_zscore')
+		bin = grp.create_group('bin')
+		bin.create_dataset('chrom', data=[l.encode('utf8') for l in bin_chrom_list],
+		                   dtype=h5py.special_dtype(vlen=str))
+		bin.create_dataset('start', data=np.concatenate(bin_start_list))
+		bin.create_dataset('end', data=np.concatenate(bin_end_list))
+		for cell in range(len(sc_cp_all)):
+			grp.create_dataset("cell_%d" % cell, data=sc_cp_zscore[cell])
 	output_f.close()
 	pool.shutdown(wait=True)
 
