@@ -61,7 +61,7 @@ def kth_diag_indices(a, k):
 		return rows, cols
 
 
-def gen_tad_and_calibrate(chrom):
+def gen_tad(chrom):
 	# print("generating single cell scores and boundaries (before calibration)")
 	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 	size = origin_sparse[0].shape[0]
@@ -120,10 +120,15 @@ def gen_tad_and_calibrate(chrom):
 	bulk_score[discard_rows] = 1.0
 	bulk_tad_b = call_tads(bulk_score, windowsize=args.window_tad, res=res)
 	
-	K = int(1.5 * len(bulk_tad_b))
+	
 	
 	sc_score = np.array(sc_score)
 	
+	return chrom, np.array(sc_score), np.array(sc_border),np.array(sc_border_indice), bulk_score, bulk_tad_b
+	
+	
+def calibrate_tad(chrom, sc_score, sc_border, sc_border_indice, bulk_score, bulk_tad_b):
+	K = int(1.5 * len(bulk_tad_b))
 	shared_boundaries, sc_assignment, calibrated_sc_boundaries = scTAD_calibrator(K, bulk_score.shape[-1],
 	                                                                              chrom).fit_transform(
 		np.copy(sc_score),
@@ -133,7 +138,7 @@ def gen_tad_and_calibrate(chrom):
 
 	calibrated_sc_border = []
 	for cb in calibrated_sc_boundaries:
-		temp = np.zeros_like(score)
+		temp = np.zeros_like(sc_score[0])
 		temp[cb] = 1
 		calibrated_sc_border.append(temp)
 	
@@ -141,14 +146,23 @@ def gen_tad_and_calibrate(chrom):
 
 
 def start_call_tads():
+	p_list = []
+	calib_p_list = []
+	pool = ProcessPoolExecutor(max_workers=3)
+	calib_pool = ProcessPoolExecutor(max_workers=23)
 	output_file = h5py.File(os.path.join(temp_dir, "scTAD.hdf5"), "w")
 	
 	result = {}
 	for chrom in chrom_list:
-		chrom, sc_score, sc_border, calib_sc_border = gen_tad_and_calibrate(chrom)
-		# print (sc_score.shape)
-		result[chrom] = [sc_score, sc_border, calib_sc_border]
+		p_list.append(pool.submit(gen_tad, chrom))
+	for p in as_completed(p_list):
+		chrom, sc_score, sc_border,sc_border_indice, bulk_score, bulk_tad_b = p.result()
+		calib_p_list.append(calib_pool.submit(calibrate_tad, chrom, sc_score, sc_border,sc_border_indice, bulk_score, bulk_tad_b))
+	pool.shutdown(wait=True)
 	
+	for p in as_completed(calib_p_list):
+		chrom, sc_score, sc_border, calib_sc_border = p.result()
+		result[chrom] = [sc_score, sc_border, calib_sc_border]
 	
 	bin_chrom_list = []
 	bin_start_list = []

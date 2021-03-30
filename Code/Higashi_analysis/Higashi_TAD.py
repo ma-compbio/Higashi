@@ -2,7 +2,7 @@ import numpy as np
 from scipy.signal import argrelextrema
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
-
+from tqdm import tqdm, trange
 def insulation_score(m, windowsize=500000, res=10000):
 	windowsize_bin = int(windowsize / res)
 	score = np.ones((len(m)))
@@ -114,14 +114,13 @@ class scTAD_calibrator():
 		sc_assignment = [[] for b in sc_boundaries]
 		
 		epoch_count = 0
+		
 		while True:
 			# Correspondence assignment
 			search_range = []
-			
-			p_list = []
-			print (self.print_identifier, "Start Epoch", epoch_count)
 			# print ("start assigning states")
-			for cell in range(n_cell):
+			bar = trange(n_cell, desc="%s Epoch %d E-step: - " % (self.print_identifier, epoch_count))
+			for cell in bar:
 				c_bound = sc_boundaries[cell]
 				
 				cell, sc_assignment_cell, search_range_cell = self.assign( cell, len(self.shared_boundaries), self.shared_boundaries, sc_score[cell], cum_score[
@@ -138,18 +137,23 @@ class scTAD_calibrator():
 			search_range = np.stack([search_range_left, search_range_right], axis=-1)
 			
 			change = 0
-			
+			pool = ProcessPoolExecutor(max_workers=5)
+			p_list = []
 			# Update center
-			for j in range(len(self.shared_boundaries)):
+			bar =  trange(len(self.shared_boundaries), desc="%s Epoch %d M-step: - " % (self.print_identifier, epoch_count))
+			for j in range(len(shared_boundaries)):
 				start, end = search_range[j]
 				if end > start:
-					updated, j = self.update(n_cell, sc_boundaries, sc_assignment, sc_score, cum_score, j, start, end)
+					p_list.append(pool.submit(self.update, n_cell, sc_boundaries, sc_assignment, sc_score, cum_score, j, start, end))
+					# updated, j = self.update(n_cell, sc_boundaries, sc_assignment, sc_score, cum_score, j, start, end)
+			for p in as_completed(p_list):
+				bar.update(1)
+				updated, j = p.result()
 					
-					
-					if self.shared_boundaries[j] != updated:
-						change += 1
-					self.shared_boundaries[j] = updated
-			
+				if self.shared_boundaries[j] != updated:
+					change += 1
+				self.shared_boundaries[j] = updated
+			pool.shutdown(wait=True)
 			if change == 0:
 				nochange_count += 1
 			else:
@@ -158,7 +162,8 @@ class scTAD_calibrator():
 				break
 			epoch_count += 1
 			
-			
+			bar.set_description("%s Epoch: %d - update_ratio = %f " % (self.print_identifier, epoch_count, change / len(self.shared_boundaries)),
+			                    refresh=False)
 			self.shared_boundaries = list(np.unique(self.shared_boundaries))
 			self.shared_boundaries.sort()
 		
@@ -194,12 +199,10 @@ class scTAD_calibrator():
 		for assignment in sc_assignment:
 			# print (assignment)
 			calibrated_sc_boundaries.append(np.unique(self.shared_boundaries[np.array(assignment).astype('int')]))
-			
-		 # = np.array(
-			# []) for assignment in sc_assignment])
+		
 		calibrated_sc_boundaries = np.array(calibrated_sc_boundaries)
-		self.shared_boundaries = np.unique(shared_boundaries)
-		boundaries2assignment = {k:v for (v,k) in enumerate(shared_boundaries)}
+		self.shared_boundaries = np.unique(self.shared_boundaries)
+		boundaries2assignment = {k:v for (v,k) in enumerate(self.shared_boundaries)}
 		new_sc_assignment = np.array([[boundaries2assignment[b] for b in calib_b] for calib_b in calibrated_sc_boundaries])
 		
 		print (self.print_identifier, "finished")
