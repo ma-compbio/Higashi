@@ -79,8 +79,13 @@ with h5py.File(output, "w") as output_f:
 	bins_start = []
 	bins_end = []
 	
+	chrom_offset = [0]
+	bin_offset = []
+	
+	
 	cell_info = {}
 	off_set = 0
+	pixel_off_set = 0
 	for chrom_index, chrom in enumerate(chrom_list):
 		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 		size = origin_sparse[0].shape[0]
@@ -104,27 +109,26 @@ with h5py.File(output, "w") as output_f:
 		for i in cell_list:
 			m1 = np.zeros((size, size))
 			proba = np.array(impute_f["cell_%d" % i])
-			m1[xs.astype('int'), ys.astype('int')] += proba
-			m1 = m1 + m1.T
-			m1 *= mask
-			temp = m1
 			
-			info = np.where(temp > 0)
-			x,y = info[0], info[1]
-			x_mask = y >= x
-			x, y = x[x_mask], y[x_mask]
-			count = temp[x, y]
 			if i not in cell_info:
 				cell_info[i] = {}
 				cell_info[i]['x'] = []
 				cell_info[i]['y'] = []
 				cell_info[i]['count'] = []
-			cell_info[i]['x'].append(x + off_set)
-			cell_info[i]['y'].append(y + off_set)
-			cell_info[i]['count'].append(count)
+			cell_info[i]['x'].append(xs + off_set)
+			cell_info[i]['y'].append(ys + off_set)
+			cell_info[i]['count'].append(proba)
 		
+		_, indice = np.unique(xs, return_index=True)
+		bin_offset.append(indice + pixel_off_set)
+		pixel_off_set += len(proba)
 		off_set += size
 		
+		chrom_offset.append(off_set)
+	
+	bin_offset.append(np.array([len(np.concatenate(cell_info[i]['count'], axis=0))]))
+	chrom_offset = np.array(chrom_offset)
+	bin_offset = np.concatenate(bin_offset)
 		
 	bins_group = output_f.create_group("bins")
 	bins_group.create_dataset(name="chrom", data=np.array(bins_chrom).astype('int32'))
@@ -139,4 +143,7 @@ with h5py.File(output, "w") as output_f:
 		pixel_group.create_dataset(name='bin1_id', data = np.concatenate(cell_info[cell]['x'], axis=0).astype('int'))
 		pixel_group.create_dataset(name='bin2_id', data=np.concatenate(cell_info[cell]['y'], axis=0).astype('int'))
 		pixel_group.create_dataset(name='count', data=np.concatenate(cell_info[cell]['count'], axis=0).astype('float'))
-	
+		
+		indexes_group = cell_group.create_group("indexes")
+		indexes_group.create_dataset(name='chrom_offset', data=chrom_offset.astype('int64'))
+		indexes_group.create_dataset(name='bin1_offset', data=bin_offset.astype('int64'))
