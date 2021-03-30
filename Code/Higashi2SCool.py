@@ -80,7 +80,7 @@ with h5py.File(output, "w") as output_f:
 	bins_end = []
 	
 	cell_info = {}
-	
+	off_set = 0
 	for chrom_index, chrom in enumerate(chrom_list):
 		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 		size = origin_sparse[0].shape[0]
@@ -90,7 +90,7 @@ with h5py.File(output, "w") as output_f:
 		bins_start.append(np.arange(size) * res)
 		bins_end.append(np.arange(size) * res + res)
 		
-		off_set = 0
+		
 		if args.neighbor:
 			impute_f = h5py.File(
 				os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
