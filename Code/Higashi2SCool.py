@@ -91,45 +91,37 @@ with h5py.File(output, "w") as output_f:
 		bins_end.append(np.arange(size) * res + res)
 		
 		off_set = 0
-		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r") as impute_f:
-			with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
-			               "r") as impute_f2:
+		if args.neighbor:
+			impute_f = h5py.File(
+				os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
+				"r")
+		else:
+			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r")
 				
-				coordinates = impute_f['coordinates']
-				xs, ys = coordinates[:, 0], coordinates[:, 1]
-				cell_list = trange(len(list(impute_f.keys())) - 1)
-				for i in cell_list:
-					m1 = np.zeros((size, size))
-					proba = np.array(impute_f["cell_%d" % i])
-					m1[xs.astype('int'), ys.astype('int')] += proba
-					m1 = m1 + m1.T
-					m1 *= mask
-					
-					m1 = sqrt_norm(m1)
-					if args.neighbor:
-						temp = np.zeros((size, size))
-						proba = np.array(impute_f2["cell_%d" % i])
-						temp[xs.astype('int'), ys.astype('int')] += proba
-						temp = temp + temp.T
-						temp *= mask
-						temp = sqrt_norm(temp)
-						temp = m1 + temp
-					else:
-						temp = m1
-					
-					info = np.where(temp > 0)
-					x,y = info[0], info[1]
-					x_mask = y >= x
-					x, y = x[x_mask], y[x_mask]
-					count = temp[x, y]
-					if i not in cell_info:
-						cell_info[i] = {}
-						cell_info[i]['x'] = []
-						cell_info[i]['y'] = []
-						cell_info[i]['count'] = []
-					cell_info[i]['x'].append(x + off_set)
-					cell_info[i]['y'].append(y + off_set)
-					cell_info[i]['count'].append(count)
+		coordinates = impute_f['coordinates']
+		xs, ys = coordinates[:, 0], coordinates[:, 1]
+		cell_list = trange(len(list(impute_f.keys())) - 1)
+		for i in cell_list:
+			m1 = np.zeros((size, size))
+			proba = np.array(impute_f["cell_%d" % i])
+			m1[xs.astype('int'), ys.astype('int')] += proba
+			m1 = m1 + m1.T
+			m1 *= mask
+			temp = m1
+			
+			info = np.where(temp > 0)
+			x,y = info[0], info[1]
+			x_mask = y >= x
+			x, y = x[x_mask], y[x_mask]
+			count = temp[x, y]
+			if i not in cell_info:
+				cell_info[i] = {}
+				cell_info[i]['x'] = []
+				cell_info[i]['y'] = []
+				cell_info[i]['count'] = []
+			cell_info[i]['x'].append(x + off_set)
+			cell_info[i]['y'].append(y + off_set)
+			cell_info[i]['count'].append(count)
 		
 		off_set += size
 		
