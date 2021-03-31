@@ -51,8 +51,11 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 	summarize = gap_tab.groupby(['chrom', 'pq_arm']).sum().reset_index()
 	# print (summarize)
 	
-	split_point = \
-	np.ceil(np.array(summarize[(summarize['chrom'] == chrom) & (summarize['pq_arm'] == 'p')]['length']) / res)[0]
+	if np.sum(summarize['pq_arm'] == 'p') > 0:
+		split_point = \
+		np.ceil(np.array(summarize[(summarize['chrom'] == chrom) & (summarize['pq_arm'] == 'p')]['length']) / res)[0]
+	else:
+		split_point = -1
 	
 	gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
 	start = np.floor((np.array(gap_list['start'])) / res).astype('int')
