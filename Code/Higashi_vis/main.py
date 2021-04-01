@@ -720,7 +720,7 @@ def color_update(attr, old, new):
 	elif new == 'read_count':
 		
 		s = np.array([a.sum() for a in origin_sparse])
-		float_color_update(s)
+		float_color_update(np.log10(s+1))
 		
 	elif new == 'cis_trans_ratio':
 		s = []
