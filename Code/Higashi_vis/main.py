@@ -1,7 +1,8 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
 import warnings
 warnings.filterwarnings("ignore")
-
+from scipy.sparse import csr_matrix
 from tqdm import tqdm, trange
 import numpy as np
 import pandas as pd
@@ -69,7 +70,7 @@ def oe(matrix, expected = None):
 		if expect == 0:
 			new_matrix[rows, cols] = 0.0
 		else:
-			new_matrix[rows, cols] = diag / (expect)
+			new_matrix[rows, cols] = diag / (expect+1e-15)
 	new_matrix = new_matrix + new_matrix.T
 	return new_matrix
 
@@ -114,33 +115,39 @@ def create_mask(k=30):
 	return a, matrix
 
 
-def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
+def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None, force_vmin=None):
 	global mask
 	fig = plt.figure(figsize=(8, 8))
 	if not cbar:
 		plt.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
 	
 	
+	if type(matrix) is not np.ndarray:
+		matrix = np.array(matrix.todense())
+	
 	if np.sum(matrix > 0) == 0:
 		return white_img
 	
 	if VC_button.active:
-		coverage = (np.sqrt(np.sum(matrix, axis=-1)) + 1e-15)
+		coverage = (np.sqrt(np.sum(matrix, axis=-1)) + 1e-8)
 		matrix = matrix / coverage.reshape((-1, 1))
 		matrix = matrix / coverage.reshape((1, -1))
 	
-	matrix = matrix[matrix_start_slider_y.value:matrix_end_slider_y.value,
-	         matrix_start_slider_x.value:matrix_end_slider_x.value]
-	
-	
-
-	matrix *= (1 - mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
-	         matrix_start_slider_x.value:matrix_end_slider_x.value])
-	mask1 = mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
-	        matrix_start_slider_x.value:matrix_end_slider_x.value].astype('bool')
-	
 	if tad_button.active:
-		matrix = pearson(oe(matrix))
+		matrix = oe(matrix)
+		matrix = pearson(matrix)
+	
+	matrix = matrix[matrix_start_slider_y.value:matrix_end_slider_y.value,
+			 matrix_start_slider_x.value:matrix_end_slider_x.value]
+	
+	matrix *= (1 - mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
+			 matrix_start_slider_x.value:matrix_end_slider_x.value])
+	mask1 = mask[matrix_start_slider_y.value:matrix_end_slider_y.value,
+			matrix_start_slider_x.value:matrix_end_slider_x.value].astype('bool')
+	
+	
+	matrix = np.ma.masked_where(mask1, matrix)
+	
 	
 	# use_rows = np.where(np.sum(mask1 == 1, axis=0) != len(matrix))[0]
 	# matrix = matrix[use_rows, :]
@@ -159,19 +166,33 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None):
 		matrix = QuantileTransformer(n_quantiles=5000, output_distribution='normal').fit_transform(
 					matrix.reshape((-1, 1))).reshape((len(matrix), -1))
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1-cutoff)+1e-15
-		# print(vmin, vmax)
-		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
+		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1-cutoff)+1e-8
+		# ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
+		ax = plt.Axes(fig, [0., 0., 1., 1.])
+		ax.set_axis_off()
+		fig.add_axes(ax)
+		
+		ax.imshow(matrix, cmap=cmap,interpolation='none', vmin=vmin, vmax=vmax)
 	else:
-		matrix = np.nan_to_num(matrix, 0.0)
+		
 		cutoff = (1 - vmin_vmax_slider.value) / 2
-		vmin, vmax = np.quantile(matrix[matrix != 0.0], cutoff), np.quantile(matrix[matrix != 0.0], 1 - cutoff)+1e-15
-		# print (vmin, vmax)
-		ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
+		v = matrix[(matrix > 1e-8)]
+		vmin, vmax = np.quantile(matrix[(matrix > 1e-8)], cutoff), np.quantile(matrix[(matrix > 1e-8)], 1 - cutoff)+1e-8
+		if force_vmin is not None:
+			vmin = force_vmin
+		if vmax - vmin <= 1e-5:
+			vmin = 0.0
+		
+		# ax = sns.heatmap(matrix, cmap=cmap, square=True, mask=mask1, cbar=cbar, vmin=vmin, vmax=vmax)
+		ax = plt.Axes(fig, [0., 0., 1., 1.])
+		ax.set_axis_off()
+		fig.add_axes(ax)
+		
+		ax.imshow(matrix, cmap=cmap, interpolation='none',vmin=vmin, vmax=vmax)
 	if darkmode_button.active:
 		ax.set_facecolor('#20262B')
-	ax.get_xaxis().set_visible(False)
-	ax.get_yaxis().set_visible(False)
+	# ax.get_xaxis().set_visible(False)
+	# ax.get_yaxis().set_visible(False)
 	
 	
 	canvas = FigureCanvas(fig)
@@ -212,12 +233,11 @@ def async_heatmap11(selected, id):
 			return
 		# plot raw
 		if len(selected) > 1:
-			b = np.array(np.sum(origin_sparse[selected], axis=0).todense()) / len(selected)
+			b = np.sum(origin_sparse[selected], axis=0) / len(selected)
 		else:
 			b = origin_sparse[selected[0]]
-			b = np.log(1+np.array(b.todense()))
-		# print (np.sum(b>0), b.shape)
-		# img = plot_heatmap_RdBu_tad(b, cmap="Reds")
+			# b = np.log1p(np.array(b.todense()))
+		b = plot_heatmap_RdBu_tad(b, force_vmin=0)
 	except Exception as e:
 		print (e)
 		# msg_list.append("original wrong")
@@ -233,7 +253,7 @@ def async_heatmap12(selected, id):
 		if len(selected) == 0:
 			return
 		size = origin_sparse[0].shape[0]
-		b = np.zeros((size, size))
+		# b = np.zeros((size, size))
 		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % chrom_selector.value), "r") as f:
 			coordinates = np.array(f['coordinates']).astype('int')
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
@@ -242,12 +262,11 @@ def async_heatmap12(selected, id):
 				proba = np.array(f["cell_%d" % i])
 				
 				p += proba
-			b[xs, ys] += p
-		b = b + b.T
-		np.fill_diagonal(b, 1.0)
-		# img = plot_heatmap_RdBu_tad(b)
+			# b[xs, ys] += p
+			b = csr_matrix((p, (xs, ys)), shape=(size, size))
+			b = b + b.T
+		b = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
-		print(e)
 		print("error", e)
 		msg_list.append("random_walk wrong")
 		# img = white_img
@@ -264,7 +283,7 @@ def async_heatmap21(selected, id):
 			return
 		size = origin_sparse[0].shape[0]
 		
-		b = np.zeros((size, size))
+		# b = np.zeros((size, size))
 		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_all.hdf5"), "r") as f:
 			coordinates = f['coordinates']
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
@@ -274,9 +293,11 @@ def async_heatmap21(selected, id):
 				proba [proba <= 1e-5] = 0.0
 				p += proba
 			
-			b[xs.astype('int'), ys.astype('int')] += proba
+			# b[xs.astype('int'), ys.astype('int')] += proba
+			# b = b + b.T
+			b = csr_matrix((p, (xs, ys)), shape=(size, size))
 			b = b + b.T
-		img = plot_heatmap_RdBu_tad(b)
+		b = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		msg_list.append("all wrong")
@@ -293,7 +314,7 @@ def async_heatmap22(selected, id):
 			return
 		size = origin_sparse[0].shape[0]
 		
-		b = np.zeros((size, size))
+		# b = np.zeros((size, size))
 		
 		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_nbr_1_impute.hdf5"), "r") as f:
 			coordinates = f['coordinates']
@@ -304,12 +325,12 @@ def async_heatmap22(selected, id):
 				proba -= np.min(proba)
 				proba[proba <= 1e-5] = 0.0
 				p += proba
-			b[xs.astype('int'), ys.astype('int')] += p
+			# b[xs.astype('int'), ys.astype('int')] += p
+			# b = b + b.T
+			b = csr_matrix((p, (xs, ys)), shape=(size, size))
 			b = b + b.T
-		
-		b *= (1 - mask)
-		np.fill_diagonal(b, np.max(b))
-		# img = plot_heatmap_RdBu_tad(b)
+		# b *= (1 - mask)
+		b = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		msg_list.append("sc impute wrong")
@@ -328,10 +349,10 @@ def async_heatmap31(selected, id):
 			return
 		size = origin_sparse[0].shape[0]
 		
-		b = np.zeros((size, size))
+		# b = np.zeros((size, size))
 		
 		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom_selector.value, embedding_name, neighbor_num)),
-	                      "r") as f:
+						  "r") as f:
 			coordinates = f['coordinates']
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
 			p = 0.0
@@ -340,12 +361,12 @@ def async_heatmap31(selected, id):
 				proba -= np.min(proba)
 				proba[proba <= 1e-5] = 0.0
 				p += proba
-			b[xs.astype('int'), ys.astype('int')] += p
+			# b[xs.astype('int'), ys.astype('int')] += p
+			# b = b + b.T
+			b = csr_matrix((p, (xs, ys)), shape=(size, size))
 			b = b + b.T
-		
-		b *= (1 - mask)
-		np.fill_diagonal(b, np.max(b))
-		# img = plot_heatmap_RdBu_tad(b)
+		# b *= (1 - mask)
+		b = plot_heatmap_RdBu_tad(b)
 	except Exception as e:
 		print(e)
 		msg_list.append("neighbor wrong")
@@ -355,7 +376,14 @@ def async_heatmap31(selected, id):
 
 
 async def async_heatmap_all(selected):
-	global mask, origin_sparse, render_cache, bulk
+	global mask, origin_sparse, render_cache, bulk, config
+	max_distance = config['maximum_distance']
+	res = config['resolution']
+	if max_distance < 0:
+		max_bin = 1e5
+	else:
+		max_bin = int(max_distance / res)
+		
 	source = [heatmap11_source, heatmap12_source, heatmap22_source, heatmap31_source]
 	h_list = [heatmap11, heatmap12, heatmap22, heatmap31]
 	
@@ -374,7 +402,7 @@ async def async_heatmap_all(selected):
 	#
 	# else:
 	if len(mask) != origin_sparse[0].shape[0]:
-		mask, bulk = create_mask(k=1e5)
+		mask, bulk = create_mask(k=max_bin)
 	pool = ProcessPoolExecutor(max_workers=5)
 	p_list = []
 	p_list.append(pool.submit(async_heatmap11, selected, 0))
@@ -417,13 +445,12 @@ async def async_heatmap_all(selected):
 		img, id = p.result()
 		# source[id].data['img'] = [np.asarray(img)]
 		result[id] = img
-		
-	result[3] += result[2]
-	for id in result:
-		img = result[id]
+	
 		
 		if type(img) is not int:
-			source[id].data['img'] = [np.asarray(plot_heatmap_RdBu_tad(img))]
+			# print (img, id)
+			source[id].data['img'] = [np.asarray(img)]
+			# source[id].data['img'] = [np.asarray(plot_heatmap_RdBu_tad(img, force_vmin = 0 if id==0 else None))]
 		else:
 			source[id].data['img'] = white_img
 			
@@ -432,7 +459,6 @@ async def async_heatmap_all(selected):
 	if key_name != "nostore" and cache_flag:
 		render_cache[key_name] = img_list
 	pool.shutdown(wait=True)
-	# print ("finished getting images")
 
 
 def update_heatmap(selected):
@@ -508,9 +534,7 @@ def update(attr, old, new):
 			if int(local_selection_slider.value) > 1:
 				v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
 				distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
-				# print (distance, distance.shape)
 				new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
-				# print (new)
 				
 			update_heatmap(new)
 			update_scatter(new)
@@ -522,7 +546,7 @@ def update(attr, old, new):
 				# categorical mode:
 				bar_info, count = np.unique(np.array(source.data['label_info'])[new], return_counts=True)
 				categorical_hh1.data_source.data = dict(x=bar_info,
-				                                        top=count)
+														top=count)
 				
 				
 			elif continuous_info.visible:
@@ -532,7 +556,7 @@ def update(attr, old, new):
 				hedges = np.array(list(hedges_miss) + [hedges_miss[-1] + width])
 				hhist1, _ = np.histogram(source.data['label_info'][new], bins=hedges)
 				continuous_hh1.data_source.data = dict(x=(hedges[:-1] + hedges[1:]) / 2,
-				                                       top=hhist1)
+													   top=hhist1)
 
 	elif type(new) == int:
 		selected = [new]
@@ -548,7 +572,7 @@ def update(attr, old, new):
 	return
 
 
-def float_color_update(s):
+def float_color_update(s, vmin=None, vmax=None):
 	hhist, hedges = np.histogram(s, bins=20)
 	hzeros = np.zeros(len(hedges) - 1)
 	hmax = max(hhist) * 1.1
@@ -582,8 +606,7 @@ def float_color_update(s):
 	source.data['legend_info'] = s
 	source.data['label_info'] = s
 	
-	
-	mapper = linear_cmap('color', palette=pal, low=np.quantile(s, 0.1), high=np.quantile(s, 0.9))
+	mapper = linear_cmap('color', palette=pal, low=np.quantile(s, 0.05) if vmin is None else vmin, high=np.quantile(s, 0.95) if vmax is None else vmax)
 	try:
 		r.selection_glyph.fill_color=mapper
 	except:
@@ -594,8 +617,8 @@ def float_color_update(s):
 		pass
 	r.glyph.fill_color = mapper
 	
-	bar.color_mapper.low = np.min(s)
-	bar.color_mapper.high = np.max(s)
+	bar.color_mapper.low = np.quantile(s, 0.05) if vmin is None else vmin
+	bar.color_mapper.high =np.quantile(s, 0.95) if vmax is None else vmax
 	
 	
 def str_color_update(s, new):
@@ -613,48 +636,49 @@ def str_color_update(s, new):
 	
 	categorical_info.x_range.factors = list(bar_info)
 	
-	embed_vis.legend.visible = True
+	
 	bar.visible = False
 	
 	l, inv = np.unique(s, return_inverse=True)
 	
-	if len(l) <= 10:
-		encoded_color = [Category10_10[xx] for xx in inv]
-	else:
-		# if 'm3C' not in data_selector.value:
-		# 	Category20_20_temp = np.array(Category20_20)
-		# 	Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
-		# 	encoded_color = [Category20_20_temp[xx] for xx in inv]
-		# # else:
-		# 	# pal1 = {'L23': '#e51f4e', 'L4': '#45af4b', 'L5': '#ffe011', 'L6': '#0081cc',
-		# 	#        'Ndnf': '#ff7f35', 'Vip': '#951eb7', 'Pvalb': '#4febee',
-		# 	#        'Sst': '#ed37d9', 'Astro': '#d1f33c', 'ODC': '#f9bdbb',
-		# 	#        'OPC': '#067d81', 'MG': '#e4bcfc', 'MP': '#ab6c1e',
-		# 	#        "Endo": '#780100'}
-		#
-		# 	encoded_color = [pal1[xx] for xx in s]
-		if 'vis_palette' not in config:
+	if 'vis_palette' not in config:
+		if len(l) <= 10:
+			encoded_color = [Category10_10[xx] for xx in inv]
+		elif len(l) <= 50:
 			Category20_20_temp = np.array(Category20_20)
-			Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])])
+			Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])]) +   list(Category20b_20) + list(Pastel1_9)
 			encoded_color = [Category20_20_temp[xx] for xx in inv]
 		else:
-			if new not in config['vis_palette']:
+			encoded_color = [Category10_10[0]] * len(s)
+	else:
+		if new not in config['vis_palette']:
+			if len(l) <= 10:
+				encoded_color = [Category10_10[xx] for xx in inv]
+			elif len(l) <= 50:
 				Category20_20_temp = np.array(Category20_20)
 				Category20_20_temp = list(Category20_20_temp[np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])]) + list(
-					Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])
+					Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])  +   list(Category20b_20) + list(Pastel1_9)
 				encoded_color = [Category20_20_temp[xx] for xx in inv]
 			else:
-				pal1 = config['vis_palette'][new]
-				encoded_color = [pal1[xx] for xx in s]
-			# s = list(s)
+				encoded_color = [Category10_10[0]] * len(s)
+		else:
+			pal1 = config['vis_palette'][new]
+			encoded_color = [pal1[xx] for xx in s]
+		# s = list(s)
 	# source.patch({
 	# 	'legend_info': [(slice(len(s)), s)],
 	# 	'label_info': [(slice(len(s)), s)],
 	# 	'color': [(slice(len(s)), encoded_color)]
 	# })
-	source.data['legend_info'] = s
+	
 	source.data['label_info'] = s
-	source.data['color'] = encoded_color
+	source.data['legend_info'] = s
+	if encoded_color is not None:
+		source.data['color'] = encoded_color
+		
+		embed_vis.legend.visible = True
+	else:
+		embed_vis.legend.visible = False
 	
 	try:
 		r.selection_glyph.fill_color='color'
@@ -670,13 +694,12 @@ def str_color_update(s, new):
 def color_update(attr, old, new):
 	categorical_info.title.text = "%s bar plot" % new
 	continuous_info.title.text = "%s histogram" % new
-	
+	global origin_sparse
 	if new == "None":
 		s = ['cell'] * cell_num
 		str_color_update(s, "None")
 	elif new == "kde":
 		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-		# print (v)
 		model1 = gaussian_kde(v.T)
 		model1 = gaussian_kde(v.T, bw_method=model1.factor/2)
 		s = model1(v.T).reshape((-1))
@@ -684,7 +707,6 @@ def color_update(attr, old, new):
 		float_color_update(np.log(s))
 	elif new == "kde_ratio":
 		v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-		# print (v)
 		model1 = gaussian_kde(v.T)
 		model2 = gaussian_kde(v.T, bw_method=model1.factor)
 		model1 = gaussian_kde(v.T, bw_method=model1.factor/2)
@@ -696,10 +718,20 @@ def color_update(attr, old, new):
 		# s2 = kde.score_samples(v)
 		float_color_update(np.log(s)-np.log(s2))
 	elif new == 'read_count':
-		global origin_sparse
+		
 		s = np.array([a.sum() for a in origin_sparse])
-		print (s, np.min(s), np.max(s))
-		float_color_update(np.log(s+1))
+		float_color_update(s)
+		
+	elif new == 'cis_trans_ratio':
+		s = []
+		for a in origin_sparse:
+			c = 0
+			for i in range(10):
+				c += (a.diagonal(i)).sum()
+			s.append((c * 2 - (a.diagonal(0)).sum()) / (a).sum())
+		
+		s = np.array(s)
+		float_color_update(s, 0.8, 1.0)
 	else:
 		s = np.array(color_scheme[new])
 		if s.dtype == 'int':
@@ -760,7 +792,7 @@ def reduction_update(attr, old, new):
 	
 def widget_update():
 	cell_slider.end=cell_num
-	color_selector.options = ["None"] + list(color_scheme.keys())+ ["kde", "kde_ratio", "read_count"]
+	color_selector.options = ["None"] + list(color_scheme.keys())+ ["kde", "kde_ratio", "read_count", "cis_trans_ratio"]
 
 
 def mds(mat, n=2):
@@ -793,7 +825,7 @@ def mds(mat, n=2):
 	return co
 
 async def calculate_and_update(v, neighbor_num, correct_color):
-	global neighbor_info, source, config
+	global neighbor_info, source, config, color_scheme
 	
 	
 	distance = pairwise_distances(v, metric='euclidean')
@@ -836,15 +868,6 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		msg_list.append("%s - TSNE finished" % timestr)
 		format_message()
 	elif dim_reduction_selector.value == 'MDS-euclidean':
-		# if max(int(x_selector_value), int(y_selector_value)) < 3:
-		# 	model = MDS(n_components=2, n_jobs=-1)
-		# else:
-		# 	model = MDS(n_components=3, n_jobs=-1)
-		# if "MDS_params" in config:
-		# 	params = config['MDS_params']
-		# 	for key in params:
-		# 		setattr(model, key, params[key])
-		# v = model.fit_transform(v)
 		v = pairwise_distances(v, metric='euclidean')
 		v =  mds(v, 2)
 		x, y = v[:, 0], v[:, 1]
@@ -853,16 +876,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		format_message()
 	elif dim_reduction_selector.value == 'MDS-cosine':
 		v = pairwise_distances(v, metric='cosine')
-		print (v)
-		# if max(int(x_selector_value), int(y_selector_value)) < 3:
-		# 	model = MDS(n_components=2, n_jobs=-1, dissimilarity='precomputed')
-		# else:
-		# 	model = MDS(n_components=3, n_jobs=-1, dissimilarity='precomputed')
-		# if "MDS_params" in config:
-		# 	params = config['MDS_params']
-		# 	for key in params:
-		# 		setattr(model, key, params[key])
-		# v = model.fit_transform(v)
+		
 		v = mds(v, 2)
 		x, y = v[:, 0], v[:, 1]
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -875,6 +889,8 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	
 	data = dict(x=x, y=y, color=["#3c84b1"] * len(x), legend_info=['cell'] * len(x),
 				label_info=np.array(['cell'] * len(x)))
+	if 'cell_name_higashi' in color_scheme:
+		data['cell_name'] = color_scheme['cell_name_higashi']
 	source.data = data
 	
 	if correct_color:
@@ -894,8 +910,11 @@ def initialize(config_name, correct_color=False):
 	neighbor_num = int(config['neighbor_num'])
 	heatmap31.title.text = "Higashi(%d)"  % (neighbor_num-1)
 	color_scheme = {}
-	with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
-		color_scheme = pickle.load(f)
+	try:
+		with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:
+			color_scheme = pickle.load(f)
+	except:
+		color_scheme = {}
 	
 	# generate embedding vectors
 	temp_str = "_origin"
@@ -1036,10 +1055,10 @@ def chrom_update(attr, old, new):
 	matrix_end_slider_y.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.end = origin_sparse[0].shape[-1]
-	
+	color_update([], [], color_selector.value)
 	update_heatmap(r.data_source.selected.indices)
+	
 
-# print ("Start initialize")
 # Initializing some global variables
 
 global config, color_scheme, v, cell_num, source, neighbor_info, mask, origin_sparse, render_cache
@@ -1168,7 +1187,7 @@ cell_slider = Slider(title='cell selector', value=0, start=0, end=cell_num,step=
 
 r = embed_vis.scatter(x="x", y="y", size=size_selector.value, fill_color="color", line_color=None, legend_field="legend_info",
 					  alpha=0.8, source=source, nonselection_fill_alpha = 0.8, selection_fill_color="color", nonselection_fill_color="color")
-embed_vis.add_tools(HoverTool(tooltips=[("index", "$index"), ("Label", "@legend_info")]))
+embed_vis.add_tools(HoverTool(tooltips=[("index", "$index"), ("Label", "@legend_info"), ("Name", "@cell_name")]))
 embed_vis.legend.location = "bottom_right"
 
 # create the color bar for continuous label
@@ -1251,16 +1270,16 @@ format_message()
 
 darkmode_button = Toggle(label="Dark mode", button_type="primary", width=150)
 darkmode_button.js_on_click(CustomJS(args=dict(button=darkmode_button, div=info_log),
-                                    code='''
-                                    if (button.active) {
-                                    document.body.style.backgroundColor = "#16191C";
-                                    document.body.style.color = "#ffffff";
-                                    }
-                                    else {
-                                    document.body.style.backgroundColor = "white";
-                                    document.body.style.color = "black";
-                                    }
-                                    '''))
+									code='''
+									if (button.active) {
+									document.body.style.backgroundColor = "#16191C";
+									document.body.style.color = "#ffffff";
+									}
+									else {
+									document.body.style.backgroundColor = "white";
+									document.body.style.color = "black";
+									}
+									'''))
 
 darkmode_button.on_click(change_theme)
 tad_button.on_click(anything_that_updates_heatmap_button)
