@@ -155,6 +155,6 @@ for cell_list, name in zip(cell_list_group, names):
 	if output[-5:] == '.cool':
 		output = output[:-5]
 		
-	os.system("cooler load temp1.txt temp2.txt %s --format coo --count-as-float" % (output+name+".cool"))
+	os.system("cooler load temp1.txt temp2.txt %s --format coo --count-as-float" % (output+"_"+name+".cool"))
 	os.remove("./temp1.txt")
 	os.remove("./temp2.txt")
