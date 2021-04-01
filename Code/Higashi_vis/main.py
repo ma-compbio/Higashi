@@ -792,7 +792,10 @@ def reduction_update(attr, old, new):
 	
 def widget_update():
 	cell_slider.end=cell_num
-	color_selector.options = ["None"] + list(color_scheme.keys())+ ["kde", "kde_ratio", "read_count", "cis_trans_ratio"]
+	keys = list(color_scheme.keys())
+	if "cell_name_higashi" in keys:
+		keys.remove("cell_name_higashi")
+	color_selector.options = ["None"] + keys+ ["kde", "kde_ratio", "read_count", "cis_trans_ratio"]
 
 
 def mds(mat, n=2):
@@ -1119,8 +1122,11 @@ h5 = heatmap31.image_rgba(image='img', x='x', y='y',dw='dw',dh='dh', source=heat
 
 
 initialize(config_dir[0], True)
+keys = list(color_scheme.keys())
+if "cell_name_higashi" in keys:
+	keys.remove("cell_name_higashi")
 
-color_selector = Select(title='color scheme', value="None", options=["None", "Random"]+list(color_scheme.keys()), width=150)
+color_selector = Select(title='color scheme', value="None", options=["None", "Random"]+keys, width=150)
 
 
 
