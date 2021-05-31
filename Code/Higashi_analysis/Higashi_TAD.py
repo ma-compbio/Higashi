@@ -3,14 +3,15 @@ from scipy.signal import argrelextrema
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from tqdm import tqdm, trange
+
 def insulation_score(m, windowsize=500000, res=10000):
 	windowsize_bin = int(windowsize / res)
-	score = np.ones((len(m)))
-	for i in range(windowsize_bin, len(m) - windowsize_bin):
+	score = np.ones((m.shape[0]))
+	for i in range(0, m.shape[0]):
 		with np.errstate(divide='ignore', invalid='ignore'):
-			v = np.sum(m[max(0, i - windowsize_bin): i, i + 1: min(len(m) - 1, i + windowsize_bin + 1)]) / (np.sum(
-				m[max(0, i - windowsize_bin):min(len(m) - 1, i + windowsize_bin + 1),
-				max(0, i - windowsize_bin):min(len(m) - 1, i + windowsize_bin + 1)]))
+			v = np.sum(m[max(0, i - windowsize_bin): i, i + 1: min(m.shape[0] - 1, i + windowsize_bin + 1)]) / (np.sum(
+				m[max(0, i - windowsize_bin):min(m.shape[0] - 1, i + windowsize_bin + 1),
+				max(0, i - windowsize_bin):min(m.shape[0] - 1, i + windowsize_bin + 1)]))
 			if np.isnan(v):
 				v = 1.0
 		

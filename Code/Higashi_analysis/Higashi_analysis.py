@@ -243,6 +243,9 @@ def get_scc(mat1, mat2, max_bins):
 	for stratum in range(max_bins):
 		s1 = mat1.diagonal(stratum)
 		s2 = mat2.diagonal(stratum)
+		mask = (~np.isnan(s1)) & (~np.isnan(s2))
+		s1 = s1[mask]
+		s2 = s2[mask]
 		if (s1 == s1[0]).all() or (s2 == s2[0]).all():
 			weights.append(0)
 			corrs.append(0)
@@ -290,6 +293,9 @@ def get_scc2(mat1, mat2, max_bins):
 	for d in range(max_bins):
 		d1 = mat1.diagonal(d)
 		d2 = mat2.diagonal(d)
+		mask = (~np.isnan(d1)) & (~np.isnan(d2))
+		d1 = d1[mask]
+		d2 = d2[mask]
 		# Silence NaN warnings: this happens for empty diagonals and will
 		# not be used in the end.
 		with warnings.catch_warnings():
@@ -525,10 +531,10 @@ def pearson(matrix):
 
 def compartment(matrix, return_PCA=False, model=None, expected = None):
 	contact = matrix
-	np.fill_diagonal(contact, np.max(contact))
-	contact = KRnormalize(matrix)
-	contact[np.isnan(contact)] = 0.0
-	# contact = sqrt_norm(matrix)
+	# np.fill_diagonal(contact, np.max(contact))
+	# contact = KRnormalize(matrix)
+	# contact[np.isnan(contact)] = 0.0
+	contact = sqrt_norm(matrix)
 	contact = oe(contact, expected)
 	np.fill_diagonal(contact, 1)
 	with warnings.catch_warnings():
@@ -586,7 +592,7 @@ def log10_norm(matrix):
 
 def quantile_norm(matrix,n_q=250, dist='uniform', clipping=None):
 	if len(matrix.shape) == 2:
-		matrix = QuantileTransformer(n_quantiles=n_q, output_distribution=dist).fit_transform(matrix.reshape((-1, 1))).reshape((len(matrix), -1))
+		matrix[~np.isnan(matrix)] = QuantileTransformer(n_quantiles=n_q, output_distribution=dist).fit_transform(matrix[~np.isnan(matrix)].reshape((-1, 1))).reshape((-1))#.reshape((len(matrix), -1))
 	else:
 		matrix = QuantileTransformer(n_quantiles=n_q, output_distribution=dist).fit_transform(matrix)
 		

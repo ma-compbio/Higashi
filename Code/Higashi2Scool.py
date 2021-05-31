@@ -88,7 +88,7 @@ if __name__ == '__main__':
 				os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
 				"r")
 		else:
-			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r")
+			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)), "r")
 			
 		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 		size = origin_sparse[0].shape[0]
@@ -162,4 +162,4 @@ if __name__ == '__main__':
 	'''
 	
 	
-	cooler.create_scool(os.path.join(temp_dir, "nbr_%d_impute.scool" % (neighbor_num if args.neighbor else 1)), bins, cell_name_pixels_dict, dtypes={'count': 'float32'}, ordered=True)
+	cooler.create_scool(os.path.join(temp_dir, "nbr_%d_impute.scool" % (neighbor_num if args.neighbor else 0)), bins, cell_name_pixels_dict, dtypes={'count': 'float32'}, ordered=True)

@@ -5,8 +5,6 @@ from sklearn.preprocessing import MinMaxScaler, quantile_transform
 import os
 
 os.environ["OMP_NUM_THREADS"] = "10"
-
-import pickle
 import pandas as pd
 import argparse
 
@@ -45,7 +43,8 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 	gap_tab.columns = ['chrom', 'start', 'end', 'name', 'type']
 	
 	name = np.array(gap_tab['name'])
-	pqarm = np.array([s[0] for s in name])
+	# print (name)
+	pqarm = np.array([str(s)[0] for s in name])
 	gap_tab['pq_arm'] = pqarm
 	gap_tab['length'] = gap_tab['end'] - gap_tab['start']
 	summarize = gap_tab.groupby(['chrom', 'pq_arm']).sum().reset_index()
@@ -71,7 +70,7 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 
 
 def process_one_chrom(chrom):
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
+	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 	size = origin_sparse[0].shape[0]
 	mask, split_point = create_mask((int(1e5)), chrom, origin_sparse)
 	
@@ -80,6 +79,13 @@ def process_one_chrom(chrom):
 	mask = (np.ones_like(bulk1) - mask)
 	bulk1 *= mask
 	
+	if "bulk_path" in config:
+		import cooler
+		c = cooler.Cooler("%s::resolutions/%d" % (config['bulk_path'], config['resolution']))
+		bulk2 = np.array(c.matrix(sparse=False, balance=False).fetch(chrom)).astype('float')
+		bulk2 *= mask
+	else:
+		bulk2 = None
 	
 	use_rows_all = []
 	
@@ -89,6 +95,7 @@ def process_one_chrom(chrom):
 		slice_start_list, slice_end_list = [0], [len(bulk1)]
 	
 	bulk_compartment_all = []
+	real_bulk_compartment_all = []
 	temp_compartment_list_all = [[] for i in range(len(slice_start_list))]
 	bulk_model_list = []
 	bulk_reverse_list = []
@@ -119,18 +126,35 @@ def process_one_chrom(chrom):
 		
 		bulk_compartment, model = compartment(bulk1_slice, return_PCA=True)
 		
+		if bulk2 is not None:
+			bulk2_slice = bulk2[slice_start:slice_end, :]
+			bulk2_slice = bulk2_slice[:, slice_start:slice_end]
+			bulk2_slice = bulk2_slice[use_rows, :]
+			bulk2_slice = bulk2_slice[:, use_rows]
+			real_bulk_compartment, model = compartment(bulk2_slice, return_PCA=True)
+		else:
+			real_bulk_compartment = None
+			
 		reverse_flag = False
 		if args.calib:
-			calib = np.load(os.path.join(temp_dir, "%s_calib.npy" % chrom)).reshape((-1, 1))[slice_start:slice_end][
+			calib = np.load(os.path.join(temp_dir, "calib.npy"), allow_pickle=True).item()[chrom].reshape((-1, 1))[slice_start:slice_end][
 				use_rows]
 			print ("average cpg", np.nanmean(calib[bulk_compartment > np.quantile(bulk_compartment,0.9)]), np.nanmean(calib[bulk_compartment < np.quantile(bulk_compartment,0.1)]))
 			if np.nanmean(calib[bulk_compartment > np.quantile(bulk_compartment,0.9)]) < np.nanmean(calib[bulk_compartment < np.quantile(bulk_compartment,0.1)]):
 				reverse_flag = True
 			if reverse_flag:
 				bulk_compartment *= -1
+			
+			if real_bulk_compartment is not None:
+				reverse_flag = False
+				if np.nanmean(calib[real_bulk_compartment > np.quantile(real_bulk_compartment, 0.9)]) < np.nanmean(
+					calib[real_bulk_compartment < np.quantile(real_bulk_compartment, 0.1)]):
+					real_bulk_compartment *= -1
+					reverse_flag = True
 		bulk_compartment_all.append(bulk_compartment)
 		bulk_reverse_list.append(reverse_flag)
 		bulk_model_list.append(model)
+		real_bulk_compartment_all.append(real_bulk_compartment)
 		
 		
 	
@@ -139,7 +163,7 @@ def process_one_chrom(chrom):
 		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
 		               "r")
 	else:
-		impute_f =  h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)),
+		impute_f =  h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)),
 		               "r")
 		
 	coordinates = impute_f['coordinates']
@@ -176,14 +200,14 @@ def process_one_chrom(chrom):
 	# print(bulk_compartment.shape, temp_compartment_list.shape)
 	
 	
-	
+	real_bulk_compartment = np.concatenate(real_bulk_compartment_all, axis=0) if bulk2 is not None else None
 	bulk_compartment = np.concatenate(bulk_compartment_all, axis=0)
 	temp_compartment_list = np.concatenate(temp_compartment_list_all, axis=-1)
 	temp_compartment_list_zscore = np.concatenate(temp_compartment_list_zscore, axis=-1)
 	temp_compartment_list_quantile = np.concatenate(temp_compartment_list_quantile, axis=-1)
 	use_rows = np.concatenate(use_rows_all, axis=0)
 	print (chrom, "finished")
-	return bulk_compartment, temp_compartment_list, temp_compartment_list_zscore, temp_compartment_list_quantile, chrom, use_rows, size
+	return real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_list_zscore, temp_compartment_list_quantile, chrom, use_rows, size
 
 
 def process_calib_file(file_path):
@@ -192,6 +216,7 @@ def process_calib_file(file_path):
 	# print(tab)
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
 	tab['chrom'] = np.array(tab['chrom']).astype('str')
+	calib_result = {}
 	for i, chrom in enumerate(chrom_list):
 		temp = tab[tab['chrom'] == chrom]
 		size = chrom_start_end[i, 1] - chrom_start_end[i, 0]
@@ -199,28 +224,29 @@ def process_calib_file(file_path):
 		indice = (np.array(temp['bin'] / res)).astype('int')
 		v = np.array(temp['value'])
 		v[v == -1] = np.nan
-		# print(chrom, vec.shape, indice, v)
 		vec[indice] = v
-		
-		np.save(os.path.join(temp_dir, "%s_calib.npy" % chrom), vec)
+		calib_result[chrom] = vec
+	np.save(os.path.join(temp_dir, "calib.npy"), calib_result, allow_pickle=True)
 
 
 def start_call_compartment():
 	p_list = []
 	pool = ProcessPoolExecutor(max_workers=10)
 	with h5py.File(os.path.join(temp_dir, "scCompartment.hdf5"), "w") as output_f:
+		result = {}
 		for chrom in chrom_list:
 			p_list.append(pool.submit(process_one_chrom, chrom))
-		
-		result = {}
+
+
 		for p in as_completed(p_list):
-			bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = p.result()
-			result[chrom] = [bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size]
+			real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = p.result()
+			result[chrom] = [real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size]
 			
 		bin_chrom_list = []
 		bin_start_list = []
 		bin_end_list = []
 		bulk_cp_all = []
+		real_bulk_cp_all = []
 		sc_cp_all = []
 		sc_cp_raw = []
 		sc_cp_zscore = []
@@ -228,13 +254,14 @@ def start_call_compartment():
 		bin = grp.create_group('bin')
 		
 		for chrom in chrom_list:
-			bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size = result[chrom]
+			real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size = result[chrom]
 			# print (use_rows)
 			length = size
 			bin_chrom_list += [chrom] * len(use_rows)
 			bin_start_list.append((np.arange(length) * res).astype('int')[use_rows])
 			bin_end_list.append(((np.arange(length) + 1) * res).astype('int')[use_rows])
 			bulk_cp_all.append(bulk_compartment)
+			real_bulk_cp_all.append(real_bulk_compartment)
 			sc_cp_all.append(temp_compartment_quantile)
 			sc_cp_raw.append(temp_compartment_list)
 			sc_cp_zscore.append(temp_compartment_zscore)
@@ -246,6 +273,10 @@ def start_call_compartment():
 		
 		bulk_cp_all = np.concatenate(bulk_cp_all, axis=0)
 		grp.create_dataset("bulk", data=bulk_cp_all)
+		
+		if real_bulk_compartment is not None:
+			real_bulk_cp_all = np.concatenate(real_bulk_cp_all, axis=0)
+			grp.create_dataset("real_bulk", data=real_bulk_cp_all)
 		
 		sc_cp_all = np.concatenate(sc_cp_all, axis=-1)
 		sc_cp_raw = np.concatenate(sc_cp_raw, axis=-1)
@@ -283,6 +314,7 @@ config = get_config(args.config)
 res = config['resolution']
 data_dir = config['data_dir']
 temp_dir = config['temp_dir']
+raw_dir = os.path.join(temp_dir, "raw")
 cytoband_path = config['cytoband_path']
 neighbor_num = config['neighbor_num']
 embedding_name = config['embedding_name']

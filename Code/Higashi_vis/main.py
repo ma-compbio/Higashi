@@ -15,7 +15,7 @@ from sklearn.metrics import pairwise_distances
 from sklearn.manifold import MDS
 from sklearn.preprocessing import StandardScaler
 from functools import partial
-
+from random import shuffle
 from scipy.stats import gaussian_kde
 from sklearn.neighbors import KernelDensity
 from bokeh.layouts import row, column
@@ -172,7 +172,7 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None, force_v
 		ax.set_axis_off()
 		fig.add_axes(ax)
 		
-		ax.imshow(matrix, cmap=cmap,interpolation='none', vmin=vmin, vmax=vmax)
+		# ax.imshow(matrix, cmap=cmap,interpolation='none', vmin=vmin, vmax=vmax)
 	else:
 		
 		cutoff = (1 - vmin_vmax_slider.value) / 2
@@ -187,32 +187,38 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None, force_v
 		ax = plt.Axes(fig, [0., 0., 1., 1.])
 		ax.set_axis_off()
 		fig.add_axes(ax)
-		
-		ax.imshow(matrix, cmap=cmap, interpolation='none',vmin=vmin, vmax=vmax)
+	print (matrix.shape)
+	matrix[matrix <= vmin] = vmin
+	matrix[matrix >= vmax] = vmax
+	matrix = (matrix - vmin)/ (vmax - vmin + 1e-15)
+	matrix = np.ma.masked_where(mask1, matrix)
+	cmap = plt.get_cmap(cmap)
+	# ax.imshow(matrix, cmap=cmap, interpolation='none',vmin=vmin, vmax=vmax)
+	img = cmap(matrix, bytes=True)
 	if darkmode_button.active:
 		ax.set_facecolor('#20262B')
 	# ax.get_xaxis().set_visible(False)
 	# ax.get_yaxis().set_visible(False)
 	
+	#
+	# canvas = FigureCanvas(fig)
+	# canvas.draw()  # draw the canvas, cache the renderer
+	# img = np.array(canvas.renderer.buffer_rgba()).astype('int8')
 	
-	canvas = FigureCanvas(fig)
-	canvas.draw()  # draw the canvas, cache the renderer
-	img = np.array(canvas.renderer.buffer_rgba()).astype('int8')
-	
-	if rotation_button.active:
-		print ("rotation")
-		im1 = Image.fromarray(img, mode='RGBA')
-		im1 = im1.rotate(-45, expand=True)
-		if darkmode_button.active:
-			bg_color = (32, 38, 43)
-		else:
-			bg_color= (255, 255, 255)
-		fff = Image.new('RGBA', im1.size, bg_color)
-		im1=Image.composite(im1, fff, im1)
-		
-		img = np.asarray(im1)
-		
-	img = img.view(dtype=np.uint32).reshape((img.shape[0], -1))
+	# if rotation_button.active:
+	# 	print ("rotation")
+	# 	im1 = Image.fromarray(img, mode='RGBA')
+	# 	im1 = im1.rotate(-45, expand=True)
+	# 	if darkmode_button.active:
+	# 		bg_color = (32, 38, 43)
+	# 	else:
+	# 		bg_color= (255, 255, 255)
+	# 	fff = Image.new('RGBA', im1.size, bg_color)
+	# 	im1=Image.composite(im1, fff, im1)
+	#
+	# 	img = np.asarray(im1)
+	#
+	img = np.asarray(img.view(dtype=np.uint32).reshape((img.shape[0], -1)))
 	plt.close(fig)
 	
 	return img
@@ -236,10 +242,11 @@ def async_heatmap11(selected, id):
 			b = np.sum(origin_sparse[selected], axis=0) / len(selected)
 		else:
 			b = origin_sparse[selected[0]]
-			# b = np.log1p(np.array(b.todense()))
+		b = np.array(b.todense())
+		print (b)
 		b = plot_heatmap_RdBu_tad(b, force_vmin=0)
 	except Exception as e:
-		print (e)
+		print ("raw error", e)
 		# msg_list.append("original wrong")
 		# img = white_img
 		b = 0
@@ -250,11 +257,12 @@ def async_heatmap12(selected, id):
 	try:
 		global config, origin_sparse
 		temp_dir = config['temp_dir']
+		rw_dir = os.path.join(temp_dir, "rw")
 		if len(selected) == 0:
 			return
 		size = origin_sparse[0].shape[0]
 		# b = np.zeros((size, size))
-		with h5py.File(os.path.join(temp_dir, "rw_%s.hdf5" % chrom_selector.value), "r") as f:
+		with h5py.File(os.path.join(rw_dir, "rw_%s.hdf5" % chrom_selector.value), "r") as f:
 			coordinates = np.array(f['coordinates']).astype('int')
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
 			p = 0
@@ -316,7 +324,7 @@ def async_heatmap22(selected, id):
 		
 		# b = np.zeros((size, size))
 		
-		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_nbr_1_impute.hdf5"), "r") as f:
+		with h5py.File(os.path.join(temp_dir, chrom_selector.value +"_"+ embedding_name+"_nbr_0_impute.hdf5"), "r") as f:
 			coordinates = f['coordinates']
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
 			p = 0
@@ -344,14 +352,14 @@ def async_heatmap31(selected, id):
 		global config, origin_sparse, bulk, mask
 		temp_dir = config['temp_dir']
 		embedding_name = config['embedding_name']
-		neighbor_num = config['neighbor_num']
+		neighbor_num = config['neighbor_num'] + 1
 		if len(selected) == 0:
 			return
 		size = origin_sparse[0].shape[0]
 		
 		# b = np.zeros((size, size))
 		
-		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom_selector.value, embedding_name, neighbor_num)),
+		with h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom_selector.value, embedding_name, neighbor_num-1)),
 						  "r") as f:
 			coordinates = f['coordinates']
 			xs, ys = coordinates[:, 0], coordinates[:, 1]
@@ -414,35 +422,11 @@ async def async_heatmap_all(selected):
 	
 	#
 	img_list = [0] * (len(p_list) + 1)
-	#
-	# img, id = async_heatmap11(selected, 0)
-	# source[id].data['img'] = [np.asarray(img)]
-	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
-	# img_list[id] = img
-	#
-	# img, id = async_heatmap12(selected, 1)
-	# source[id].data['img'] = [np.asarray(img)]
-	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
-	# img_list[id] = img
-	#
-	# img, id = async_heatmap21(selected, 2)
-	# source[id].data['img'] = [np.asarray(img)]
-	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
-	# img_list[id] = img
-	#
-	# img, id = async_heatmap22(selected, 3)
-	# source[id].data['img'] = [np.asarray(img)]
-	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
-	# img_list[id] = img
-	#
-	# img, id = async_heatmap31(selected, 4)
-	# source[id].data['img'] = [np.asarray(img)]
-	# h_list[id].title.text = h_list[id].title.text.split(":")[0]
-	# img_list[id] = img
 	
 	result  = {}
 	for p in as_completed(p_list):
 		img, id = p.result()
+		print ("finish getting image", id)
 		# source[id].data['img'] = [np.asarray(img)]
 		result[id] = img
 	
@@ -459,9 +443,11 @@ async def async_heatmap_all(selected):
 	if key_name != "nostore" and cache_flag:
 		render_cache[key_name] = img_list
 	pool.shutdown(wait=True)
+	return
 
 
 def update_heatmap(selected):
+	# print (r.data_source.data)
 	print ("update_heatmap", selected)
 	if len(selected) > 0:
 		for h in [heatmap11, heatmap12, heatmap22, heatmap31]:
@@ -646,7 +632,9 @@ def str_color_update(s, new):
 			encoded_color = [Category10_10[xx] for xx in inv]
 		elif len(l) <= 50:
 			Category20_20_temp = np.array(Category20_20)
-			Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])]) +   list(Category20b_20) + list(Pastel1_9)
+			Category20_20_temp = list(Category20_20_temp) + list(Category20_20_temp)
+			# Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])]) +   list(Category20b_20)
+			# shuffle(Category20_20_temp)
 			encoded_color = [Category20_20_temp[xx] for xx in inv]
 		else:
 			encoded_color = [Category10_10[0]] * len(s)
@@ -656,8 +644,10 @@ def str_color_update(s, new):
 				encoded_color = [Category10_10[xx] for xx in inv]
 			elif len(l) <= 50:
 				Category20_20_temp = np.array(Category20_20)
-				Category20_20_temp = list(Category20_20_temp[np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])]) + list(
-					Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])  +   list(Category20b_20) + list(Pastel1_9)
+				Category20_20_temp = list(Category20_20_temp) + list(Category20_20_temp)
+				# Category20_20_temp = list(Category20_20_temp[np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])]) + list(
+				# 	Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])  +   list(Category20b_20)
+				# shuffle(Category20_20_temp)
 				encoded_color = [Category20_20_temp[xx] for xx in inv]
 			else:
 				encoded_color = [Category10_10[0]] * len(s)
@@ -720,18 +710,20 @@ def color_update(attr, old, new):
 	elif new == 'read_count':
 		
 		s = np.array([a.sum() for a in origin_sparse])
-		float_color_update(np.log10(s+1))
-		
+		print (s)
+		if np.max(s) > origin_sparse[0].shape[0]:
+			s = np.log10(s+1)
+		float_color_update(s)
 	elif new == 'cis_trans_ratio':
 		s = []
 		for a in origin_sparse:
 			c = 0
-			for i in range(10):
+			for i in range(20):
 				c += (a.diagonal(i)).sum()
 			s.append((c * 2 - (a.diagonal(0)).sum()) / (a).sum())
 		
 		s = np.array(s)
-		float_color_update(s, 0.8, 1.0)
+		float_color_update(s)
 	else:
 		s = np.array(color_scheme[new])
 		if s.dtype == 'int':
@@ -756,16 +748,17 @@ def data_update(attr, old, new):
 	embed_vis.title.text = "Loading... Please wait"
 	
 	r.data_source.selected.indices = []
-	
+	color_selector.value = "None"
 	initialize(name2config[new], correct_color=True)
 	# print(config['impute_list'])
 	chrom_selector.options = config['impute_list']
 	chrom_selector.value = config['impute_list'][0]
-	color_selector.value = "None"
+
 	
 	global origin_sparse
 	temp_dir = config['temp_dir']
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % config['impute_list'][0]), allow_pickle=True)
+	raw_dir = os.path.join(temp_dir, "raw")
+	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % config['impute_list'][0]), allow_pickle=True)
 	categorical_h_all.data_source.selected.indices = []
 	matrix_start_slider_x.value=0
 	matrix_start_slider_x.end = origin_sparse[0].shape[-1]
@@ -841,12 +834,13 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		
 		v = PCA(n_components=3).fit_transform(v)
 		x, y = v[:, int(x_selector_value) - 1], v[:, int(y_selector_value) - 1]
+		# print (x, y)
 	elif dim_reduction_selector.value == "UMAP":
 		if max(int(x_selector_value), int(y_selector_value)) < 3:
 			
-			model = UMAP(n_components=2, n_neighbors=15, min_dist=0.1)
+			model = UMAP(n_components=2)
 		else:
-			model = UMAP(n_components=3, n_neighbors=15, min_dist=0.1)
+			model = UMAP(n_components=3)
 		if "UMAP_params" in config:
 			params = dict(config['UMAP_params'])
 			for key in params:
@@ -888,8 +882,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		
 	# generate neighbor info
 	neighbor_info = np.argsort(distance, axis=-1)[:, :neighbor_num]
-	
-	
+	# print (x, y)
 	data = dict(x=x, y=y, color=["#3c84b1"] * len(x), legend_info=['cell'] * len(x),
 				label_info=np.array(['cell'] * len(x)))
 	if 'cell_name_higashi' in color_scheme:
@@ -902,7 +895,8 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 		update([], [], [])
 		r.data_source.selected.indices = []
 		embed_vis.title.text = "%s projection of embeddings" % (dim_reduction_selector.value)
-
+	print ("finish init")
+	return
 
 def initialize(config_name, correct_color=False):
 	global config, color_scheme, v, cell_num, source, neighbor_info
@@ -921,7 +915,8 @@ def initialize(config_name, correct_color=False):
 	
 	# generate embedding vectors
 	temp_str = "_origin"
-	v = np.load(os.path.join(temp_dir, "%s_0%s.npy" % (embedding_name, temp_str)))
+	embed_dir = os.path.join(temp_dir, "embed")
+	v = np.load(os.path.join(embed_dir, "%s_0%s.npy" % (embedding_name, temp_str)))
 
 	cell_num = len(v)
 	if dim_reduction_selector.value == "UMAP":
@@ -941,22 +936,24 @@ def initialize(config_name, correct_color=False):
 		msg_list.append("%s - MDS computing, it takes time" % timestr)
 		format_message()
 	curdoc().add_next_tick_callback(partial(calculate_and_update, v, neighbor_num, correct_color))
-	
+
 	
 	
 def Kmean_ARI(button):
 	global config, source
 	temp_dir = config['temp_dir']
+	embed_dir = os.path.join(temp_dir, "embed")
 	embedding_name = config['embedding_name']
 
 	# generate embedding vectors
-	v = np.load(os.path.join(temp_dir, "%s_0_origin.npy" % embedding_name))
+	v = np.load(os.path.join(embed_dir, "%s_0_origin.npy" % embedding_name))
 	target = np.array(source.data['label_info'])
 	target2int = np.zeros_like(target, dtype='int')
-	uniques = np.unique(target)
+	uniques, counts = np.unique(target, return_counts=True)
+	
 	for i, t in enumerate(uniques):
 		target2int[target == t] = i
-	
+	# uniques = uniques[counts >= 40]
 	pred = KMeans(n_clusters=len(uniques), n_init = 200).fit(v).labels_
 	ari1 = adjusted_rand_score(target2int, pred)
 
@@ -1047,7 +1044,8 @@ def axis_update(attr, old, new):
 def chrom_update(attr, old, new):
 	global origin_sparse
 	temp_dir = config['temp_dir']
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_selector.value), allow_pickle=True)
+	raw_dir = os.path.join(temp_dir, "raw")
+	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom_selector.value), allow_pickle=True)
 	matrix_start_slider_x.end = origin_sparse[0].shape[-1]
 	matrix_end_slider_x.end = origin_sparse[0].shape[-1]
 	matrix_start_slider_x.value = 0
@@ -1160,7 +1158,8 @@ minus_button.on_click(minus_cell)
 plus_button.on_click(plus_cell)
 
 temp_dir = config['temp_dir']
-origin_sparse = np.load(os.path.join(temp_dir, "chr1_sparse_adj.npy"), allow_pickle=True)
+raw_dir = os.path.join(temp_dir, "raw")
+origin_sparse = np.load(os.path.join(raw_dir, "chr1_sparse_adj.npy"), allow_pickle=True)
 
 
 plot_distance_selector = Slider(title='Heatmap distance', value=origin_sparse[0].shape[-1], start=1, end=origin_sparse[0].shape[-1], step=1, width=150, value_throttled=2000)
@@ -1192,7 +1191,7 @@ cell_slider = Slider(title='cell selector', value=0, start=0, end=cell_num,step=
 
 
 r = embed_vis.scatter(x="x", y="y", size=size_selector.value, fill_color="color", line_color=None, legend_field="legend_info",
-					  alpha=0.8, source=source, nonselection_fill_alpha = 0.8, selection_fill_color="color", nonselection_fill_color="color")
+					  alpha=0.9, source=source, nonselection_fill_alpha = 0.9, selection_fill_color="color", nonselection_fill_color="color")
 embed_vis.add_tools(HoverTool(tooltips=[("index", "$index"), ("Label", "@legend_info"), ("Name", "@cell_name")]))
 embed_vis.legend.location = "bottom_right"
 
@@ -1293,7 +1292,7 @@ VC_button.on_click(anything_that_updates_heatmap_button)
 quantile_button.on_click(anything_that_updates_heatmap_button)
 layout= column(row(
 			row(
-				column(heatmap11, heatmap22, info_log),
+				column(heatmap11, heatmap22),
 				column(heatmap12, heatmap31),
 			),
 			embed_vis,
@@ -1311,10 +1310,11 @@ layout= column(row(
 				row(quantile_button, VC_button),
 				row(minus_button, plus_button),
 				row( cell_slider),
-				categorical_info,
-				continuous_info
+
 			),
-		))
+		), row(info_log,categorical_info,
+				continuous_info))
+
 from bokeh.themes import built_in_themes, Theme
 
 r.data_source.selected.on_change('indices', update)
