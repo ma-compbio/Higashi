@@ -79,7 +79,7 @@ def gen_tad(chrom):
 		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
 		               "r")
 	else:
-		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r")
+		impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)), "r")
 		
 	coordinates = impute_f['coordinates']
 	xs, ys = coordinates[:, 0], coordinates[:, 1]
