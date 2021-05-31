@@ -1,3 +1,4 @@
+import cooler
 import numpy as np
 import torch
 from tqdm import tqdm, trange
@@ -11,7 +12,10 @@ import os
 import h5py
 import pickle
 from sklearn.linear_model import LinearRegression
-import scipy
+import pandas as pd
+
+tqdm.monitor_interval = 0
+
 def get_config(config_path = "./config.jSON"):
 	c = open(config_path,"r")
 	return json.load(c)
@@ -20,8 +24,16 @@ def write_config(data, config_path):
 	with open(config_path, 'w') as outfile:
 		json.dump(data, outfile)
 
+
+def fetch_batch_id(config, str1):
+	batch_id_info = np.array(
+		pickle.load(open(os.path.join(config["data_dir"], "label_info.pickle"), "rb"))[config[str1]])
+
+	return batch_id_info
+
 def transform_weight_class(weight, mean, neg_num):
 	weight = np.log2(weight + 1)
+	weight[weight >= np.quantile(weight, 0.99)] = np.quantile(weight, 0.99)
 	weight = weight / mean * neg_num
 	return weight
 
@@ -51,13 +63,13 @@ def roc_auc_cuda(y_true, y_pred):
 		y_pred = y_pred.cpu().detach().numpy().reshape((-1, 1))
 	try:
 		return roc_auc_score(
-			y_true, y_pred), average_precision_score(
-			y_true, y_pred)
+			y_true.reshape((-1)), y_pred.reshape((-1))), average_precision_score(
+			y_true.reshape((-1)), y_pred.reshape((-1))), "auc", "aupr"
 	except BaseException:
 		try:
-			return pearsonr(y_true.reshape((-1)), y_pred.reshape((-1)))[0], spearmanr(y_true.reshape((-1)), y_pred.reshape((-1)))[0]
+			return pearsonr(y_true.reshape((-1)), y_pred.reshape((-1)))[0], spearmanr(y_true.reshape((-1)), y_pred.reshape((-1)))[0], "pearson", "spearman"
 		except:
-			return 0.0, 0.0
+			return 0.0, 0.0, "error", "error"
 
 
 def accuracy(output, target):
@@ -157,10 +169,25 @@ def parallel_build_hash(data, func, num, initial = None, compress = False):
 
 	return dict1
 
-def generate_binpair( start, end, min_bin_, max_bin_):
+def skip_start_end(config, chrom="chr1"):
+	res = config['resolution']
+	gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None)
+	gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
+	gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
+	start = np.floor((np.array(gap_list['start']) - 100000) / res).astype('int')
+	end = np.ceil((np.array(gap_list['end']) + 100000) / res).astype('int')
+	return start, end
+
+def generate_binpair( start, end, min_bin_, max_bin_, not_use_set=None):
+	if not_use_set is None:
+		not_use_set = set()
 	samples = []
 	for bin1 in range(start, end):
+		if bin1 in not_use_set:
+			continue
 		for bin2 in range(bin1 + min_bin_, min(bin1 + max_bin_, end)):
+			if bin2 in not_use_set:
+				continue
 			samples.append([bin1, bin2])
 	samples = np.array(samples) + 1
 	return samples
@@ -179,10 +206,10 @@ def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir, impute_list, name2
 		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r")
 	bar = trange(len(np.concatenate(cell_id_splits)))
 	for i, ids in enumerate(cell_id_splits):
+		ids = np.copy(ids)
 		with h5py.File(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)), "r") as input_f:
 			if i == 0:
 				f.create_dataset('coordinates', data=input_f['coordinates'])
-			# print (input_f.keys(), "%s_%s_part_%d.hdf5" % (chrom, name, i))
 			for cell in ids:
 				v1 = np.array(input_f["cell_%d" % (cell)])
 				if name2 is not None:
@@ -190,119 +217,25 @@ def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir, impute_list, name2
 					v = v1 / np.mean(v1) + v2 / np.mean(v2)
 				else:
 					v = v1 / np.mean(v1)
-				f.create_dataset('cell_%d' % cell, data=v)
+				f.create_dataset('cell_%d' % cell, data=v, compression="gzip", compression_opts=6)
 				bar.update(1)
-				bar.refresh()
+
 	f.close()
 	if name2 is not None:
 		f1.close()
 
 def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 	print("start linking hdf5 files")
-	pool = ProcessPoolExecutor(max_workers=len(impute_list))
+	pool = ProcessPoolExecutor(max_workers=3)
 	for chrom in tqdm(impute_list):
-		pool.submit(linkhdf5_one_chrom, chrom, name, cell_id_splits, temp_dir, impute_list, name2)
+		# linkhdf5_one_chrom( chrom, name, np.copy(cell_id_splits), temp_dir, impute_list, name2)
+		pool.submit(linkhdf5_one_chrom, chrom, name, np.copy(cell_id_splits), temp_dir, impute_list, name2)
 	pool.shutdown(wait=True)
-	# for chrom in impute_list:
-	# 	for i in range(len(cell_id_splits)):
-	# 		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
+	for chrom in impute_list:
+		for i in range(len(cell_id_splits)):
+			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
-def modify_nbr_hdf5(name1, name2, temp_dir, impute_list, config):
-	print ("Post processing step 1")
-	neighbor = config['neighbor_num']
-	for chrom in tqdm(impute_list):
-		f1 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name1)), "r")
-		f2 = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name2)), "r+")
-		
-		for id_ in f1.keys():
-			if "cell" in id_:
-				data2 = f2[id_]
-				v = (np.array(f2[id_]) + np.array(f1[id_])) / neighbor
-				data2[...] = v
-		f1.close()
-		f2.close()
 
-def rank_match_hdf5_one_chrom(name, temp_dir, chrom, config):
-	f = h5py.File(os.path.join(temp_dir, "%s_%s.hdf5" % (chrom, name)), "r+")
-	coordinates = np.array(f['coordinates']).astype('int')
-	xs, ys = coordinates[:, 0], coordinates[:, 1]
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
-	
-	bulk = np.array(np.sum(origin_sparse, axis=0).todense()) / len(origin_sparse)
-	values = bulk[xs, ys]
-	
-	max_distance = config['maximum_distance']
-	res = config['resolution']
-	
-	if max_distance > 0:
-		max_bin = int(max_distance / res)
-		
-		length = len(values)
-		nonzerosum = np.sum(values > 1e-15)
-		final_values = [values[values > 1e-15]]
-		
-		if (np.sum(bulk > 1e-15) / length) > 1:
-			k = max_bin + 1
-			while nonzerosum < length:
-				v = np.diag(bulk, k)
-				final_values.append(v[v > 1e-15])
-				nonzerosum += np.sum(v > 1e-15)
-				k += 1
-				
-				if k == (origin_sparse[0].shape[0]):
-					break
-				# print (nonzerosum)
-				
-			final_values = np.concatenate(final_values, axis=0)
-			if len(final_values) > length:
-				values = final_values[:length]
-			else:
-				values = np.concatenate([final_values, final_values, np.zeros([length - len(final_values)])])[:length]
-		else:
-			values = np.sort(bulk.reshape((-1)))[::-1][:length]
-	
-	
-	values_sorted = np.sort(values)
-	print ("sorted", values_sorted, np.sum(values_sorted > 1e-15) / len(values_sorted), np.sum(bulk > 1e-15) / len(values_sorted))
-	
-	bar = trange((len(f.keys())-1) * 2)
-	for id_ in range((len(f.keys())-1)):
-		bar.update(1)
-		id_ = "cell_%d" % id_
-		data = f[id_]
-		v = np.array(f[id_])
-		order = np.argsort(v)
-		
-		v[order] = values_sorted
-		data[...] = v
-	
-	background = []
-	random_choice = np.random.choice(np.arange(len(f.keys())-1), min(1000,len(f.keys())-1), replace=True)
-	for id_ in random_choice:
-		v = np.array(f["cell_%d" % id_])
-		background.append(v)
-	background = np.stack(background, axis=0)
-	bg = np.quantile(background, 0.01, axis=0)
-	del background
-	for id_ in range((len(f.keys())-1)):
-		bar.update(1)
-		id_ = "cell_%d" % id_
-		data = f[id_]
-		v = np.array(f[id_])
-		v -= bg
-		v[v < 0] = 0.0
-		data[...] = v
-	
-	f.close()
-	
-	
-	
-def rank_match_hdf5(name, temp_dir, chrom_list, config):
-	print("Post processing final step")
-	pool = ProcessPoolExecutor(max_workers=len(chrom_list))
-	for chrom in chrom_list:
-		pool.submit(rank_match_hdf5_one_chrom, name, temp_dir, chrom, config)
-	pool.shutdown(wait=True)
 
 def get_neighbor(x, neighbor_mask):
 	a = np.copy(x)
@@ -324,13 +257,14 @@ def get_neighbor_mask():
 
 def remove_BE_linear(temp1, config, data_dir):
 	if "batch_id" in config:
+		print ("initial removing BE")
 		if type(temp1) is list:
 			temp1 = np.concatenate(temp1, axis=-1)
 
-		batch_id_info = pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]
+		batch_id_info = np.array(pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]).reshape((-1))
 		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
 		for i, u in enumerate(np.unique(batch_id_info)):
-			new_batch_id_info[batch_id_info == u, i] = 1
+			new_batch_id_info[batch_id_info == u, i] += 1
 		batch_id_info = np.array(new_batch_id_info)
 		temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
 
