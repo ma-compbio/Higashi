@@ -59,24 +59,30 @@ output = args.output
 
 
 list1 = args.list
-file_type = list1.split(".")[-1]
-if file_type == 'npy':
-	list1 = np.load(list1)
-else:
-	list_file = open(list1, "r")
-	list1 = []
-	for line in list_file.readlines():
-		list1.append(line.strip())
-	list1 = np.array(list1)
 
-list_type = args.type
-if list_type == 'selected':
-	cell_list_group = [list1.astype('int')]
-	names= [""]
-elif list_type == 'group':
-	unique_label = np.unique(list1)
-	cell_list_group = [np.where(list1 == u)[0] for u in unique_label]
-	names = unique_label
+if list1 is None:
+	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[-1]), allow_pickle=True)
+	cell_list_group = [np.arange(len(origin_sparse))]
+	names = [""]
+else:
+	file_type = list1.split(".")[-1]
+	if file_type == 'npy':
+		list1 = np.load(list1)
+	else:
+		list_file = open(list1, "r")
+		list1 = []
+		for line in list_file.readlines():
+			list1.append(line.strip())
+		list1 = np.array(list1)
+
+	list_type = args.type
+	if list_type == 'selected':
+		cell_list_group = [list1.astype('int')]
+		names= [""]
+	elif list_type == 'group':
+		unique_label = np.unique(list1)
+		cell_list_group = [np.where(list1 == u)[0] for u in unique_label]
+		names = unique_label
 
 for cell_list, name in zip(cell_list_group, names):
 	
@@ -105,7 +111,7 @@ for cell_list, name in zip(cell_list_group, names):
 				os.path.join(temp_dir, "%s_%s_nbr_%d_impute.hdf5" % (chrom, embedding_name, neighbor_num)),
 				"r")
 		else:
-			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_1_impute.hdf5" % (chrom, embedding_name)), "r")
+			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)), "r")
 		
 		coordinates = impute_f['coordinates']
 		xs, ys = coordinates[:, 0], coordinates[:, 1]
