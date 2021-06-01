@@ -905,7 +905,7 @@ def initialize(config_name, correct_color=False):
 	data_dir = config['data_dir']
 	embedding_name = config['embedding_name']
 	neighbor_num = int(config['neighbor_num'])
-	heatmap31.title.text = "Higashi(%d)"  % (neighbor_num-1)
+	heatmap31.title.text = "Higashi(%d)"  % (neighbor_num)
 	color_scheme = {}
 	try:
 		with open(os.path.join(data_dir, "label_info.pickle"), "rb") as f:

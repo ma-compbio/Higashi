@@ -1266,6 +1266,9 @@ if __name__ == '__main__':
 
 	if impute_with_nbr_flag:
 		nbr_mode = 0
+		if neighbor_num == 1:
+			print ("cannot train step 3 with neighbor_num = 0")
+			raise EOFError
 		if not impute_no_nbr_flag:
 			nbr_mode = 0
 		if remove_be_flag:
