@@ -599,7 +599,7 @@ def generate_feats_one(temp, total_embed_size, total_chrom_size, c):
 		U, s, Vt = pca(temp, k=size)  # Automatically centers.
 		temp1 =  np.array(U[:, :size] * s[:size])
 	else:
-		temp1 = np.eye(temp1.shape[0])
+		temp1 = np.eye(temp.shape[0])
 
 	return temp1, c
 	# np.save(os.path.join(temp_dir, "%s_cell_PCA.npy" % c), temp1)
