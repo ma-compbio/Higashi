@@ -676,12 +676,16 @@ def generate_attributes():
 			cell_node_feats = StandardScaler().fit_transform(cell_node_feats)
 			embeddings.append(cell_node_feats)
 		else:
-			cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
-			cell_node_feats1 = StandardScaler().fit_transform(cell_node_feats1.reshape((-1, 1))).reshape((len(cell_node_feats1), -1))
-			cell_node_feats2 = [StandardScaler().fit_transform(x) for x in cell_node_feats]
-			cell_node_feats2 = remove_BE_linear(cell_node_feats2, config, data_dir)
-			cell_node_feats2 = StandardScaler().fit_transform(cell_node_feats2.reshape((-1, 1))).reshape((len(cell_node_feats2), -1))
-
+			if num[0] >= 3:
+				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
+				cell_node_feats1 = StandardScaler().fit_transform(cell_node_feats1.reshape((-1, 1))).reshape((len(cell_node_feats1), -1))
+				cell_node_feats2 = [StandardScaler().fit_transform(x) for x in cell_node_feats]
+				cell_node_feats2 = remove_BE_linear(cell_node_feats2, config, data_dir)
+				cell_node_feats2 = StandardScaler().fit_transform(cell_node_feats2.reshape((-1, 1))).reshape((len(cell_node_feats2), -1))
+			else:
+				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
+				cell_node_feats2 = cell_node_feats1
+				
 			targets.append(cell_node_feats2.astype('float32'))
 			embeddings.append(cell_node_feats1.astype('float32'))
 
