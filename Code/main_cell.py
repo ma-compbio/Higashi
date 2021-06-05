@@ -80,11 +80,10 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_ch
 		pred = pred * extra
 		pred_var = F.softplus(pred_var)
 
-		pred = torch.clamp(pred, min=1e-8)
-		pred_var = torch.clamp(pred_var, min=1e-8)
-		main_loss = -log_zinb_positive(w.float(), pred.float(), pred_var.float(), pred_proba.float(), correct_factor=1)
+		pred = torch.clamp(pred, min=1e-8, max=1e8)
+		pred_var = torch.clamp(pred_var, min=1e-8, max=1e8)
+		main_loss = -log_zinb_positive(w.float(), pred.float(), pred_var.float(), pred_proba.float())
 		main_loss = main_loss.mean()
-
 	elif mode == 'regression':
 		pred = pred.float().view(-1)
 		w = w.float().view(-1)
@@ -266,8 +265,8 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 	
 	success_count = 0
 	
-	change_list_all = rg.integers(0, x.shape[-1], (len(x), neg_num))
-	simple_or_hard_all = rg.random((len(x), neg_num))
+	change_list_all = rg.integers(0, x.shape[-1], (len(x), neg_num+1))
+	simple_or_hard_all = rg.random((len(x), neg_num+1))
 	for j, sample in enumerate(func1(x)):
 		
 		for i in range(neg_num):
@@ -276,7 +275,8 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 			trial = 0
 			while check_nonzero(temp, x_chrom[j]):
 			# while flag:
-				temp = np.copy(sample)
+				if steps == 1:
+					temp = np.copy(sample)
 				
 				# Try too many times on one sample, move on
 				trial += 1
@@ -317,13 +317,15 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 				temp.sort()
 				
 				# Not a suitable sample
-				if ((temp[2] - temp[1]) >= max_bin) or ((temp[2] - temp[1]) < min_bin):
+				if ((temp[2] - temp[1]) >= max_bin) or ((temp[2] - temp[1]) <= 1):
 					temp = np.copy(sample)
 				
 			if len(temp) > 0:
 				neg_list[success_count, :] = temp
 				neg_chrom[success_count] = x_chrom[j]
 				success_count += 1
+			if success_count == neg_num * len(x):
+				break
 	
 	return neg_list[:success_count], neg_chrom[:success_count]
 
@@ -436,15 +438,10 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 			nbr_value = np.array(
 				row[nbrs[0], nbrs[1]]).reshape((-1))
 			nbrs = np.array(nbrs[1])
-				
-				
-			# nbr_value = np.log1p(nbr_value)
+			nbr_value = np.log1p(nbr_value)
 			
 			nbrs = np.array(nbrs).reshape((-1)) + 1 + num_list[c]
 			
-			
-			
-
 			if type(nbrs) is not np.ndarray:
 				print (row, nbrs)
 			if len(nbrs) > 0:
@@ -794,6 +791,7 @@ def get_cell_neighbor(start=1):
 		
 		new_w = np.exp(-new_w[start:])
 		new_w /= np.sum(new_w)
+		
 
 		cell_neighbor_list[i + 1] = (neighbor_new + 1)[start:]
 		cell_neighbor_weight_list[i + 1] = (new_w)
@@ -881,17 +879,7 @@ if __name__ == '__main__':
 	else:
 		coassay = False
 	
-	max_distance = config['maximum_distance']
-	if max_distance < 0:
-		max_bin = int(1e5)
-	else:
-		max_bin = int(max_distance / res)
 	
-	min_distance = config['minimum_distance']
-	if min_distance < 0:
-		min_bin = 0
-	else:
-		min_bin = int(min_distance / res)
 	save_path = os.path.join(temp_dir, "model")
 	if not os.path.exists(save_path):
 		os.makedirs(save_path)
@@ -981,7 +969,7 @@ if __name__ == '__main__':
 	for c in chrom_start_end:
 		start, end = c[0], c[1]
 		for i in range(start, end):
-			for j in range(min(i + min_bin, end), min(end, i + max_bin)):
+			for j in range(i, end):
 				total_possible += 1
 	
 	total_possible *= cell_num
@@ -1024,16 +1012,16 @@ if __name__ == '__main__':
 	print("data", data, np.max(data), data.shape, weight)
 	del data, weight, chrom_info
 	
-	train_mask = ((train_data[:, 2] - train_data[:, 1]) >= min_bin) & ((train_data[:, 2] - train_data[:, 1]) < max_bin)
+	train_mask = ((train_data[:, 2] - train_data[:, 1]) >= 2) #& ((train_data[:, 2] - train_data[:, 1]) < max_bin)
 	train_data = train_data[train_mask]
 	train_weight = train_weight[train_mask]
 	train_chrom = train_chrom[train_mask]
-	
-	test_mask = ((test_data[:, 2] - test_data[:, 1]) >= min_bin) & ((test_data[:, 2] - test_data[:, 1]) < max_bin)
+
+	test_mask = ((test_data[:, 2] - test_data[:, 1]) >= 2) #& ((test_data[:, 2] - test_data[:, 1]) < max_bin)
 	test_data = test_data[test_mask]
 	test_weight = test_weight[test_mask]
 	test_chrom = test_chrom[test_mask]
-	
+	#
 	
 	print("Node type num", num, num_list)
 	start_end_dict = np.concatenate([np.zeros((1, 2)), start_end_dict], axis=0).astype('int')
@@ -1136,19 +1124,19 @@ if __name__ == '__main__':
 											  int(batch_size / (neg_num + 1)),
 											  False, num_list, k=1)
 	
-	del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight,
+	# del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight,
 	steps = 1
 	# First round, no cell dependent GNN
 	if training_stage <= 1:
-		print ("Pre-training")
-		use_recon = False
-		higashi_model.only_distance=True
-		train(higashi_model,
-		      loss=loss,
-		      training_data_generator=training_data_generator,
-		      validation_data_generator=validation_data_generator,
-		      optimizer=[optimizer], epochs=5,
-		      load_first=False, save_embed=True)
+		# print ("Pre-training")
+		# use_recon = False
+		# higashi_model.only_distance=True
+		# train(higashi_model,
+		#       loss=loss,
+		#       training_data_generator=training_data_generator,
+		#       validation_data_generator=validation_data_generator,
+		#       optimizer=[optimizer], epochs=5,
+		#       load_first=False, save_embed=False)
 			
 		
 		pair_ratio = 0.0
@@ -1187,8 +1175,37 @@ if __name__ == '__main__':
 	higashi_model.load_state_dict(checkpoint['model_link'])
 	save_embeddings(higashi_model)
 	node_embedding_init.off_hook([0])
+	
+	max_distance = config['maximum_distance']
+	if max_distance < 0:
+		max_bin = int(1e5)
+	else:
+		max_bin = int(max_distance / res)
 
+	min_distance = config['minimum_distance']
+	if min_distance < 0:
+		min_bin = 0
+	else:
+		min_bin = int(min_distance / res)
+	
+	train_mask = ((train_data[:, 2] - train_data[:, 1]) > min_bin)   & ((train_data[:, 2] - train_data[:, 1]) < max_bin)
+	train_data = train_data[train_mask]
+	train_weight = train_weight[train_mask]
+	train_chrom = train_chrom[train_mask]
 
+	test_mask = ((test_data[:, 2] - test_data[:, 1]) > min_bin)   & ((test_data[:, 2] - test_data[:, 1]) < max_bin)
+	test_data = test_data[test_mask]
+	test_weight = test_weight[test_mask]
+	test_chrom = test_chrom[test_mask]
+
+	training_data_generator = DataGenerator(train_data, train_chrom, train_weight,
+	                                        int(batch_size / (neg_num + 1) * collect_num),
+	                                        True, num_list, k=collect_num)
+	validation_data_generator = DataGenerator(test_data, test_chrom, test_weight,
+	                                          int(batch_size / (neg_num + 1)),
+	                                          False, num_list, k=1)
+	
+	
 	alpha = 1.0
 	beta = 1e-3
 	dynamic_pair_ratio = False
@@ -1273,8 +1290,7 @@ if __name__ == '__main__':
 			nbr_mode = 0
 		if remove_be_flag:
 			nbr_mode = 0
-
-		print ("nbr_mode", nbr_mode)
+			
 		# Training Stage 3
 		print ("getting cell nbr's nbr list")
 
@@ -1290,8 +1306,7 @@ if __name__ == '__main__':
 			for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
 				weight_dict[(c, i)] = w
 		weighted_adj = True
-
-		# print("processing neighboring info")
+		
 		if precompute_weighted_nbr:
 			new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
 			for c, chrom in enumerate(chrom_list):

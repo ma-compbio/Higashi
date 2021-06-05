@@ -12,6 +12,7 @@ def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi single cell TAD calling")
 	parser.add_argument('-c', '--config', type=str, default="../config_dir/config_ercker_10Kb.JSON")
 	parser.add_argument('-n', '--neighbor', default=False, action='store_true')
+	parser.add_argument('-o', '--output', type=str, default="scTAD")
 	parser.add_argument('--window_ins', type=int, default=500000)
 	parser.add_argument('--window_tad', type=int, default=500000)
 	
@@ -57,7 +58,7 @@ def kth_diag_indices(a, k):
 
 
 def gen_tad(chrom):
-	print("generating single cell scores and boundaries (before calibration)")
+	print("generating single cell scores and boundaries (before calibration) for", chrom)
 	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 	size = origin_sparse[0].shape[0]
 	mask, bulk1 = create_mask((int(1e5)), chrom, origin_sparse)
@@ -142,18 +143,22 @@ def calibrate_tad(chrom, sc_score, sc_border, sc_border_indice, bulk_score, bulk
 def start_call_tads():
 	p_list = []
 	calib_p_list = []
-	pool = ProcessPoolExecutor(max_workers=1)
+	pool = ProcessPoolExecutor(max_workers=3)
 	calib_pool = ProcessPoolExecutor(max_workers=23)
-	output_file = h5py.File(os.path.join(temp_dir, "scTAD.hdf5"), "w")
+	output = args.output
+	if ".hdf5" not in output:
+		output += ".hdf5"
+	output_file = h5py.File(os.path.join(temp_dir, output), "w")
 	
 	result = {}
 	for chrom in chrom_list:
 		p_list.append(pool.submit(gen_tad, chrom))
 	for p in as_completed(p_list):
 		chrom, sc_score, sc_border,sc_border_indice, bulk_score, bulk_tad_b = p.result()
+		calib_sc_border = []
 		calib_p_list.append(calib_pool.submit(calibrate_tad, chrom, sc_score, sc_border,sc_border_indice, bulk_score, bulk_tad_b))
 	pool.shutdown(wait=True)
-	
+
 	for p in as_completed(calib_p_list):
 		chrom, sc_score, sc_border, calib_sc_border = p.result()
 		result[chrom] = [sc_score, sc_border, calib_sc_border, bulk_score]

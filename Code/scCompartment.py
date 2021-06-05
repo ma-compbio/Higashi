@@ -13,6 +13,7 @@ def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi single cell compartment calling")
 	parser.add_argument('-c', '--config', type=str, default="../config_dir/config_Ren_221.JSON")
 	parser.add_argument('-n', '--neighbor', default=False, action='store_true')
+	parser.add_argument('-o', '--output', type=str, default="scCompartment")
 	parser.add_argument('--calib_file', type=str, default="./calib.bed")
 	parser.add_argument('--calib', action='store_true')
 	return parser.parse_args()
@@ -232,7 +233,10 @@ def process_calib_file(file_path):
 def start_call_compartment():
 	p_list = []
 	pool = ProcessPoolExecutor(max_workers=10)
-	with h5py.File(os.path.join(temp_dir, "scCompartment.hdf5"), "w") as output_f:
+	output = args.output
+	if ".hdf5" not in output:
+		output += ".hdf5"
+	with h5py.File(os.path.join(temp_dir, output), "w") as output_f:
 		result = {}
 		for chrom in chrom_list:
 			p_list.append(pool.submit(process_one_chrom, chrom))

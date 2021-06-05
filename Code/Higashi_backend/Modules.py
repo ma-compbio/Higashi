@@ -21,7 +21,7 @@ activation_func = swish
 
 # Code adapted from scVI
 def log_zinb_positive(
-	x: torch.Tensor, mu: torch.Tensor, theta: torch.Tensor, pi: torch.Tensor, correct_factor=1.0, eps=1e-8
+	x: torch.Tensor, mu: torch.Tensor, theta: torch.Tensor, pi: torch.Tensor, eps=1e-8
 ):
 	"""
 	Log likelihood (scalar) of a minibatch according to a zinb model.
@@ -68,8 +68,8 @@ def log_zinb_positive(
 	)
 	mul_case_non_zero = torch.mul((x > eps).type(torch.float32), case_non_zero)
 
-	res = mul_case_zero * correct_factor + mul_case_non_zero
-
+	res = mul_case_zero + mul_case_non_zero
+	
 	return res
 
 
@@ -757,13 +757,13 @@ class Hyper_SAGNN(nn.Module):
 			# output_mean /= mask_sum
 			output_mean = torch.mean(output_mean, dim=-2, keepdim=False)
 			
-			output_var = self.pff_classifier_var(output)
+			output_var = self.pff_classifier_var(static)
 			# output_var = torch.sum(output_var * non_pad_mask, dim=-2, keepdim=False)
 			# output_var /= mask_sum
 			output_var = torch.mean(output_var, dim=-2, keepdim=False)
-
 			output_mean = output_mean + distance_proba2
 			output_var = output_var + distance_proba3
+			
 		else:
 			return distance_proba2, distance_proba3, distance_proba
 		return output_mean, output_var, output_proba
@@ -1325,9 +1325,8 @@ class MeanAggregator_with_weights(nn.Module):
 
 	def forward_GCN(self, nodes, adj, moving_range=0):
 		embed_matrix = self.features(nodes)
-		# adj.data = np.log1p(adj.data)
 		adj = moving_avg(adj, moving_range)
-
+		adj.data = np.log1p(adj.data)
 		adj = normalize(adj, norm='l1', axis=1)
 		Acoo = adj.tocoo()
 		

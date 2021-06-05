@@ -203,8 +203,9 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 			scale_factor_cell =  total_read_count / cell_num / (np.sum(temp_weight2[mask1]) + 1e-15)
 			m2 = csr_matrix((temp_weight2[mask1], (temp2[mask1, 0], temp2[mask1, 1])), shape=(size, size))
 			m2 = m2 + m2.T
+			m2 += diags(np.array(m2.sum(axis=-1) == 0).reshape((-1)).astype('float'))
 			m2 = m2 * scale_factor_cell
-			m2.data = np.log1p(m2.data)
+			# m2.data = np.log1p(m2.data)
 			
 			sparse_list_for_gcn.append(m2)
 			
