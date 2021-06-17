@@ -137,7 +137,7 @@ def calibrate_tad(chrom, sc_score, sc_border, sc_border_indice, bulk_score, bulk
 		temp[cb] = 1
 		calibrated_sc_border.append(temp)
 	
-	return chrom, np.array(sc_score), np.array(sc_border), np.array(calibrated_sc_border)
+	return chrom, np.array(sc_score), np.array(sc_border), np.array(calibrated_sc_border), bulk_score
 
 
 def start_call_tads():
@@ -160,7 +160,7 @@ def start_call_tads():
 	pool.shutdown(wait=True)
 
 	for p in as_completed(calib_p_list):
-		chrom, sc_score, sc_border, calib_sc_border = p.result()
+		chrom, sc_score, sc_border, calib_sc_border, bulk_score = p.result()
 		result[chrom] = [sc_score, sc_border, calib_sc_border, bulk_score]
 	
 	bin_chrom_list = []
