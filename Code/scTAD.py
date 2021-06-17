@@ -178,7 +178,7 @@ def start_call_tads():
 		bin_start_list.append((np.arange(length)*res).astype('int'))
 		bin_end_list.append(((np.arange(length)+1)*res).astype('int'))
 		signal_list.append(vec)
-		bulk_list.append(bulk_score)
+		bulk_list.append(bulk)
 	bin.create_dataset('chrom', data=[l.encode('utf8') for l in bin_chrom_list], dtype = h5py.special_dtype(vlen=str))
 	bin.create_dataset('start', data = np.concatenate(bin_start_list))
 	bin.create_dataset('end', data=np.concatenate(bin_end_list))
