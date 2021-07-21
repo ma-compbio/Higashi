@@ -830,7 +830,8 @@ class PositionwiseFeedForward(nn.Module):
 		self.w_stack = []
 		self.dims = dims
 		for i in range(len(dims) - 1):
-			self.w_stack.append(nn.Conv1d(dims[i], dims[i + 1], 1, use_bias))
+			self.w_stack.append(nn.Conv1d(dims[i], dims[i + 1], 1, bias=use_bias))
+			# self.w_stack.append(nn.Linear(dims[i], dims[i + 1], bias=use_bias))
 		
 		self.w_stack = nn.ModuleList(self.w_stack)
 		self.reshape = reshape
