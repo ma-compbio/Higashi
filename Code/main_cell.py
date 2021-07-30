@@ -611,7 +611,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 				no_improve += 1
 			scheduler.step(bce_loss)
 		
-		if no_improve >= 6:
+		if no_improve >= 3:
 			print ("no improvement early stopping")
 			break
 		print ("no improve", no_improve)
@@ -961,7 +961,7 @@ if __name__ == '__main__':
 	cell_num = num[0]
 	cell_ids = (torch.arange(num[0])).long().to(device, non_blocking=True)
 	
-	mem_efficient_flag = cell_num > 10
+	mem_efficient_flag = cell_num > 30
 
 	distance2weight = distance2weight.reshape((-1, 1))
 	distance2weight = torch.from_numpy(distance2weight).float().to(device, non_blocking=True)
