@@ -325,7 +325,6 @@ class TiedAutoEncoder(nn.Module):
 						no_improve_count += 1
 					if no_improve_count >= 30:
 						break
-			time.sleep(0.1)
 			bar.set_description("%.3f" % (loss.item()), refresh=False)
 		if epochs > 0:
 			print("loss", loss.item(), "loss best", loss_best, "epochs", i)

@@ -8,6 +8,7 @@ from Impute import impute_process
 import argparse
 import resource
 from scipy.sparse import csr_matrix
+from scipy.sparse.csr import get_csr_submatrix
 from sklearn.preprocessing import StandardScaler
 import pickle
 import subprocess
@@ -106,7 +107,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	
 	batch_num = int(update_num_per_training_epoch / collect_num)
 	
-	pool = ProcessPoolExecutor(max_workers=max(int(cpu_num * 0.9) - 1, 1))
+	pool = ProcessPoolExecutor(max_workers=max(int(cpu_num * 0.9) + 1, 1))
 	p_list = []
 	y_list, w_list, pred_list = [], [], []
 	
@@ -115,7 +116,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	for i in range(batch_num):
 		edges_part, edges_chrom, edge_weight_part = training_data_generator.next_iter()
 		p_list.append(pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True))
-	
+		
 	for p in as_completed(p_list):
 		batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big = p.result()
 		batch_edge_big = np2tensor_hyper(batch_edge_big, dtype=torch.long)
@@ -247,14 +248,16 @@ def eval_epoch(model, loss_func, validation_data_generator):
 
 def check_nonzero(x, c):
 	# minus 1 because add padding index
-	dim = sparse_chrom_list[c][x[0]-1].shape[-1]
-	return sparse_chrom_list[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1), max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
-
+	if mem_efficient_flag:
+		dim = sparse_chrom_list_dict[c][x[0]-1].shape[-1]
+		return sparse_chrom_list_dict[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1),
+		       max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
+	else:
+		return sparse_chrom_list_dict[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
 
 def generate_negative_cpu(x, x_chrom, forward=True):
 	global pair_ratio
 	rg = np.random.default_rng()
-	
 	neg_list, neg_chrom = np.zeros((x.shape[0] * neg_num, x.shape[1]), dtype='int'), \
 	                                 np.zeros((x.shape[0] * neg_num), dtype='int8')
 	
@@ -265,8 +268,8 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 	
 	success_count = 0
 	
-	change_list_all = rg.integers(0, x.shape[-1], (len(x), neg_num+1))
-	simple_or_hard_all = rg.random((len(x), neg_num+1))
+	change_list_all = rg.integers(0, x.shape[-1], (len(x), neg_num))
+	simple_or_hard_all = rg.random((len(x), neg_num))
 	for j, sample in enumerate(func1(x)):
 		
 		for i in range(neg_num):
@@ -302,6 +305,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 					
 				else:
 					start, end = start_end_dict[int(temp[0])]
+						
 					temp[0] = rg.choice(end - start) + start + 1
 					
 					start, end = start_end_dict[int(temp[1])]
@@ -311,6 +315,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 					start = max(start, temp[1] - max_bin)
 					end = min(end, temp[1] + max_bin)
 					
+					
 					temp[2] = rg.choice(end - start) + start + 1
 					
 				
@@ -319,7 +324,7 @@ def generate_negative_cpu(x, x_chrom, forward=True):
 				# Not a suitable sample
 				if ((temp[2] - temp[1]) >= max_bin) or ((temp[2] - temp[1]) <= 1):
 					temp = np.copy(sample)
-				
+			
 			if len(temp) > 0:
 				neg_list[success_count, :] = temp
 				neg_chrom[success_count] = x_chrom[j]
@@ -410,13 +415,16 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 		nodes_chrom = np.stack([x_chrom, x_chrom], axis=-1).reshape((-1))
 		to_neighs = []
 		
-		for c, cell_id, bin_id, remove_bin_id in zip(nodes_chrom, cell_ids, bin_ids, remove_bin_ids.reshape((-1))):
-			
+		rg = np.random.default_rng()
+		remove_or_not = rg.random(len(nodes_chrom))
+		
+		for i, (c, cell_id, bin_id, remove_bin_id) in enumerate(zip(nodes_chrom, cell_ids, bin_ids, remove_bin_ids.reshape((-1)))):
 			if precompute_weighted_nbr:
-				row = new_sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
-				if training and (random.random() >= 0.6):
-					if len(row.data) > 1:
-						row[0, remove_bin_id - 1 - num_list[c]] = 0
+				mtx = sparse_chrom_list_GCN[c][cell_id - 1]
+				row = bin_id - 1 - num_list[c]
+				M, N = mtx.shape
+				indptr, nbrs, nbr_value = get_csr_submatrix(
+					M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
 			else:
 				if weighted_adj:
 					row = 0
@@ -424,24 +432,30 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 						balance_weight = weight_dict[(nbr_cell, cell_id)]
 						temp = balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
 
-						if training and (nbr_cell == cell_id) and (random.random() >= 0.6):
+						if training and (nbr_cell == cell_id) and (remove_or_not[i] >= 0.6):
 							if len(temp.data) > 1:
 								temp[0, remove_bin_id - 1 - num_list[c]] = 0
 						row = row + temp
+					nbrs = row.nonzero()
+					nbr_value = np.array(
+						row[nbrs[0], nbrs[1]]).reshape((-1))
 				else:
-					row = sparse_chrom_list[c][cell_id - 1][bin_id - 1 - num_list[c]]
-					if training and (random.random() >= 0.6):
-						if len(row.data) > 1:
-							row[0, remove_bin_id - 1 - num_list[c]] = 0
-						
-			nbrs = row.nonzero()
-			nbr_value = np.array(
-				row[nbrs[0], nbrs[1]]).reshape((-1))
-			nbrs = np.array(nbrs[1])
+					mtx = sparse_chrom_list_GCN[c][cell_id - 1]
+					row = bin_id - 1 - num_list[c]
+					M, N = mtx.shape
+					indptr, nbrs, nbr_value = get_csr_submatrix(
+						M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
+					
+					
+			if training and (remove_or_not[i] >= 0.6):
+				if len(nbrs) > 1:
+					mask = nbrs != (remove_bin_id - 1 - num_list[c])
+					nbrs = nbrs[mask]
+					nbr_value = nbr_value[mask]
+			
 			nbr_value = np.log1p(nbr_value)
-			
-			nbrs = np.array(nbrs).reshape((-1)) + 1 + num_list[c]
-			
+			nbrs = nbrs.reshape((-1)) + 1 + num_list[c]
+
 			if type(nbrs) is not np.ndarray:
 				print (row, nbrs)
 			if len(nbrs) > 0:
@@ -478,6 +492,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 														 j * size: min((j + 1) * size, len(x))]
 	
 				index = np.random.permutation(len(x_part))
+
 				x_part, y_part, w_part, x_chrom_part, to_neighs_part, remove_bin_ids_part = x_part[index], \
 																							y_part[index],\
 																							w_part[index],\
@@ -489,7 +504,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 				new_w.append(w_part)
 				new_x_chrom.append(x_chrom_part)
 				to_neighs_new.append(to_neighs_to_mask(to_neighs_part))
-				to_neighs = to_neighs_new
+			to_neighs = to_neighs_new
 	else:
 		size = int(len(x) / collect_num)
 		if collect_num == 1:
@@ -673,7 +688,7 @@ def generate_attributes():
 			cell_node_feats = StandardScaler().fit_transform(cell_node_feats)
 			embeddings.append(cell_node_feats)
 		else:
-			if num[0] >= 3:
+			if num[0] >= 10:
 				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
 				cell_node_feats1 = StandardScaler().fit_transform(cell_node_feats1.reshape((-1, 1))).reshape((len(cell_node_feats1), -1))
 				cell_node_feats2 = [StandardScaler().fit_transform(x) for x in cell_node_feats]
@@ -946,6 +961,7 @@ if __name__ == '__main__':
 	cell_num = num[0]
 	cell_ids = (torch.arange(num[0])).long().to(device, non_blocking=True)
 	
+	mem_efficient_flag = cell_num > 10
 
 	distance2weight = distance2weight.reshape((-1, 1))
 	distance2weight = torch.from_numpy(distance2weight).float().to(device, non_blocking=True)
@@ -1052,7 +1068,23 @@ if __name__ == '__main__':
 	
 	
 	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
-	new_sparse_chrom_list = sparse_chrom_list
+	
+	if not mem_efficient_flag:
+		import copy
+		sparse_chrom_list_GCN = sparse_chrom_list
+		sparse_chrom_list_dict = copy.deepcopy(sparse_chrom_list)
+		conv_weight = torch.ones((1, 1, 3, 3)).float()
+		for chrom in range(len(sparse_chrom_list)):
+			for cell in range(len(sparse_chrom_list[0])):
+				sparse_chrom_list_dict[chrom][cell] = np.array(sparse_chrom_list_dict[chrom][cell].todense())
+				m = sparse_chrom_list_dict[chrom][cell][None, None, :, :]
+				m = torch.from_numpy(m).float()
+				m = F.conv2d(m, conv_weight, padding=2)
+				sparse_chrom_list_dict[chrom][cell] = m.detach().cpu().numpy()[0, 0, 1:-1, 1:-1]
+	else:
+		sparse_chrom_list_GCN = sparse_chrom_list
+		sparse_chrom_list_dict = sparse_chrom_list
+	
 
 		
 	if mode == 'classification':
@@ -1140,7 +1172,10 @@ if __name__ == '__main__':
 			
 		
 		pair_ratio = 0.0
-		dynamic_pair_ratio = True
+		if mem_efficient_flag:
+			dynamic_pair_ratio = True
+		else:
+			dynamic_pair_ratio = False
 
 		# Training Stage 1
 		scheduler = ReduceLROnPlateau(
@@ -1175,7 +1210,7 @@ if __name__ == '__main__':
 	higashi_model.load_state_dict(checkpoint['model_link'])
 	save_embeddings(higashi_model)
 	node_embedding_init.off_hook([0])
-	
+
 	max_distance = config['maximum_distance']
 	if max_distance < 0:
 		max_bin = int(1e5)
@@ -1187,7 +1222,7 @@ if __name__ == '__main__':
 		min_bin = 0
 	else:
 		min_bin = int(min_distance / res)
-	
+
 	train_mask = ((train_data[:, 2] - train_data[:, 1]) > min_bin)   & ((train_data[:, 2] - train_data[:, 1]) < max_bin)
 	train_data = train_data[train_mask]
 	train_weight = train_weight[train_mask]
@@ -1204,13 +1239,16 @@ if __name__ == '__main__':
 	validation_data_generator = DataGenerator(test_data, test_chrom, test_weight,
 	                                          int(batch_size / (neg_num + 1)),
 	                                          False, num_list, k=1)
-	
-	
+
+
 	alpha = 1.0
 	beta = 1e-3
 	dynamic_pair_ratio = False
 	use_recon = False
-	pair_ratio = 0.5
+	if mem_efficient_flag:
+		pair_ratio = 0.5
+	else:
+		pair_ratio = 0.0
 
 	remove_flag = True
 	node_embedding2 = GraphSageEncoder_with_weights(features=node_embedding_init, linear_features=node_embedding_init,
@@ -1250,6 +1288,13 @@ if __name__ == '__main__':
 				  optimizer=[optimizer], epochs=no_nbr_epoch,
 				  load_first=False, save_embed=False,
 			      save_name="_stage2")
+			
+			train(higashi_model,
+			      loss=loss,
+			      training_data_generator=training_data_generator,
+			      validation_data_generator=validation_data_generator,
+			      optimizer=[optimizer], epochs=embedding_epoch,
+			      load_first=False, save_embed=True, save_name="_stage1")
 			checkpoint = {
 					'model_link': higashi_model.state_dict()}
 
@@ -1290,7 +1335,7 @@ if __name__ == '__main__':
 			nbr_mode = 0
 		if remove_be_flag:
 			nbr_mode = 0
-			
+
 		# Training Stage 3
 		print ("getting cell nbr's nbr list")
 
@@ -1306,7 +1351,7 @@ if __name__ == '__main__':
 			for c, w in zip(cell_neighbor_list[i], cell_neighbor_weight_list[i]):
 				weight_dict[(c, i)] = w
 		weighted_adj = True
-		
+
 		if precompute_weighted_nbr:
 			new_sparse_chrom_list = [[] for i in range(len(sparse_chrom_list))]
 			for c, chrom in enumerate(chrom_list):
@@ -1321,7 +1366,8 @@ if __name__ == '__main__':
 				new_cell_chrom_list = np.array(new_cell_chrom_list)
 				new_sparse_chrom_list[c] = new_cell_chrom_list
 			new_sparse_chrom_list = np.array(new_sparse_chrom_list)
-
+			sparse_chrom_list_GCN = new_sparse_chrom_list
+			
 		np.save(os.path.join(temp_dir, "weighted_info.npy"), np.array([cell_neighbor_list, weight_dict]), allow_pickle=True)
 
 		# node_embedding1 = GraphSageEncoder_with_weights(features=node_embedding2, linear_features=node_embedding2,

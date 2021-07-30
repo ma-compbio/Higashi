@@ -10,8 +10,8 @@ def insulation_score(m, windowsize=500000, res=10000):
 	for i in range(0, m.shape[0]):
 		with np.errstate(divide='ignore', invalid='ignore'):
 			v = np.sum(m[max(0, i - windowsize_bin): i, i + 1: min(m.shape[0] - 1, i + windowsize_bin + 1)]) / (np.sum(
-				m[max(0, i - windowsize_bin):min(m.shape[0] - 1, i + windowsize_bin + 1),
-				max(0, i - windowsize_bin):min(m.shape[0] - 1, i + windowsize_bin + 1)]))
+				m[max(0, i - windowsize_bin):min(m.shape[0], i + windowsize_bin + 1),
+				max(0, i - windowsize_bin):min(m.shape[0], i + windowsize_bin + 1)]))
 			if np.isnan(v):
 				v = 1.0
 		

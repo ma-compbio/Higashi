@@ -268,10 +268,8 @@ def remove_BE_linear(temp1, config, data_dir):
 		batch_id_info = np.array(new_batch_id_info)
 		temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
 
-	
+
 	else:
 		if type(temp1) is list:
 			temp1 = np.concatenate(temp1, axis=-1)
-
-	
 	return temp1
