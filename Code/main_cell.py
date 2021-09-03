@@ -1289,12 +1289,6 @@ if __name__ == '__main__':
 				  load_first=False, save_embed=False,
 			      save_name="_stage2")
 			
-			train(higashi_model,
-			      loss=loss,
-			      training_data_generator=training_data_generator,
-			      validation_data_generator=validation_data_generator,
-			      optimizer=[optimizer], epochs=embedding_epoch,
-			      load_first=False, save_embed=True, save_name="_stage1")
 			checkpoint = {
 					'model_link': higashi_model.state_dict()}
 
