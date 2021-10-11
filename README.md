@@ -3,7 +3,7 @@
 <img src="https://github.com/ma-compbio/Higashi/blob/main/figs/logo2.png" align="right"
      alt="logo" width="290">
 
-https://doi.org/10.1101/2020.12.13.422537
+https://doi.org/10.1038/s41587-021-01034-y
 
 As a computational framework for scHi-C analysis, Higashi has the following features:
 
@@ -34,10 +34,9 @@ Cite our paper by
 @article {Zhang2020multiscale,
 	author = {Zhang, Ruochi and Zhou, Tianming and Ma, Jian},
 	title = {Multiscale and integrative single-cell Hi-C analysis with Higashi},
-	year = {2020},
-	doi = {10.1101/2020.12.13.422537},
-	publisher = {Cold Spring Harbor Laboratory},
-	journal = {bioRxiv}
+	year={2021},
+	publisher = {Nature Publishing Group},
+	journal = {Nature biotechnology}
 }
 ```
 
