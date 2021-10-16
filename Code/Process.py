@@ -1,4 +1,5 @@
 import argparse
+import shutil
 from Higashi_backend.Modules import *
 from Higashi_analysis.Higashi_analysis import *
 import torch
@@ -58,33 +59,35 @@ def generate_chrom_start_end():
 	
 	
 def data2triplets(data, chrom_start_end, verbose):
-	data = data[data['chrom1'] == data['chrom2']].reset_index()
 	pos1 = np.array(data['pos1'])
 	pos2 = np.array(data['pos2'])
 	bin1 = np.floor(pos1 / res).astype('int')
 	bin2 = np.floor(pos2 / res).astype('int')
 	
-	new_bin1 = np.minimum(bin1, bin2)
-	new_bin2 = np.maximum(bin1, bin2)
-	bin1 = new_bin1
-	bin2 = new_bin2
+	# new_bin1 = np.minimum(bin1, bin2)
+	# new_bin2 = np.maximum(bin1, bin2)
+	# bin1 = new_bin1
+	# bin2 = new_bin2
 	chrom1, chrom2 = np.array(data['chrom1'].values), np.array(data['chrom2'].values)
 	cell_id = np.array(data['cell_id'].values).astype('int')
 	count = np.array(data['count'].values)
 	
 	del data
 	
-	new_chrom = np.ones_like(bin1, dtype='int') * -1
+	new_chrom1 = np.ones_like(bin1, dtype='int') * -1
+	new_chrom2 = np.ones_like(bin1, dtype='int') * -1
 	for i, chrom in enumerate(chrom_list):
 		mask = (chrom1 == chrom)
-		new_chrom[mask] = i
+		new_chrom1[mask] = i
 		# Make the bin id for chromosome 2 starts at the end of the chromosome 1, etc...
 		bin1[mask] += chrom_start_end[i, 0]
+		mask = (chrom2 == chrom)
+		new_chrom2[mask] = i
 		bin2[mask] += chrom_start_end[i, 0]
 	
 	# Exclude the chromosomes that showed in the data but are not selected.
-	data = np.stack([cell_id, new_chrom, bin1, bin2], axis=-1)
-	mask = data[:, 1] >= 0
+	data = np.stack([cell_id, new_chrom1, new_chrom2, bin1, bin2], axis=-1)
+	mask = (data[:, 1] >= 0) & (data[:, 2] >= 0)
 	count = count[mask]
 	data = data[mask]
 	
@@ -93,6 +96,7 @@ def data2triplets(data, chrom_start_end, verbose):
 	func1 = tqdm if verbose else pass_
 	for i, iv in enumerate(func1(inv)):
 		new_count[iv] += count[i]
+	
 		
 	return unique, new_count
 
@@ -116,7 +120,7 @@ def extract_table():
 			bar = trange(line_count, desc=' - Processing ', leave=False, )
 			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
 				chunk_count = 0
-				reader =  pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
+				reader = pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
 				for chunk in reader:
 					if len(chunk['cell_id'].unique()) == 1:
 						# Only one cell, keep appending
@@ -153,39 +157,50 @@ def extract_table():
 		data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
 		# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 		unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
-		
-	np.save(os.path.join(temp_dir, "data.npy"), unique, allow_pickle=True)
-	np.save(os.path.join(temp_dir, "weight.npy"), new_count, allow_pickle=True)
+	
+	intra_contacts = unique[:, 1] == unique[:, 2]
+	inter_contacts = unique[:, 1] != unique[:, 2]
+	
+	intra_data = unique[intra_contacts]
+	intra_count = new_count[intra_contacts]
+	intra_data = intra_data[:, [0, 1, 3, 4]]
+	bin1, bin2 = intra_data[:, 2], intra_data[:, 3]
+	new_bin1 = np.minimum(bin1, bin2)
+	new_bin2 = np.maximum(bin1, bin2)
+	intra_data[:, 2] = new_bin1
+	intra_data[:, 3] = new_bin2
+	
+	np.save(os.path.join(temp_dir, "data.npy"), intra_data, allow_pickle=True)
+	np.save(os.path.join(temp_dir, "weight.npy"), intra_count, allow_pickle=True)
+	
+	np.save(os.path.join(temp_dir, "inter_data.npy"), unique[inter_contacts], allow_pickle=True)
+	np.save(os.path.join(temp_dir, "inter_weight.npy"), new_count[inter_contacts], allow_pickle=True)
 
 
-def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, pca_flag):
+def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, pca_flag, total_part_num=1, part_num=0, per_cell_read=1000):
 	with warnings.catch_warnings():
 		warnings.filterwarnings(
 			"ignore", category= SparseEfficiencyWarning
 		)
 		cell_adj = []
-		bin_adj = np.zeros((size, size))
+		
 		sparse_list = []
 		sparse_list_for_gcn = []
 		
-		temp_mask = temp
-		temp_weight_mask = temp_weight
-		for i in range(len(temp_mask)):
-			bin_adj[temp_mask[i, 2] - chrom_start_end[c, 0], temp_mask[i, 3] - chrom_start_end[c, 0]] += temp_weight_mask[i]
-		bin_adj = bin_adj + bin_adj.T - np.diag(np.diagonal(bin_adj)) + np.eye(len(bin_adj))
-		bin_adj = sqrt_norm(bin_adj)
-		
-		
-		if pca_flag:
-			size1 = int(0.2 * len(bin_adj))
-			U, s, Vt = pca(bin_adj, k=size1)  # Automatically centers.
-			bin_adj = np.array(U[:, :size1] * s[:size1])
 		read_count = []
-		sparsity_metric = []
-
-		total_read_count = np.sum(temp_weight)
+		# sparsity_metric = []
 		
-		for i in trange(cell_num):
+		a = []
+		
+		
+		if type(cell_num) is int:
+			bar = trange(cell_num)
+			cell_id = np.arange(cell_num)
+		else:
+			bar = tqdm(cell_num)
+			cell_id = cell_num
+			
+		for i in bar:
 			mask = temp[:, 0] == i
 			temp2 = (temp[mask, 2:] - chrom_start_end[c, 0])
 			temp2_scale = np.floor(temp2 / scale_factor).astype('int')
@@ -200,23 +215,25 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 
 			mask1 =  ((temp2[:, 1] - temp2[:, 0]) > 0)
 
-			scale_factor_cell =  total_read_count / cell_num / (np.sum(temp_weight2[mask1]) + 1e-15)
+			read_count_norm =  per_cell_read / (np.sum(temp_weight2[mask1]) + 1e-15)
 			m2 = csr_matrix((temp_weight2[mask1], (temp2[mask1, 0], temp2[mask1, 1])), shape=(size, size))
 			m2 = m2 + m2.T
+			# avg_bin_cov = np.array(m2.sum(axis=-1))
+			# avg_bin_cov = avg_bin_cov[avg_bin_cov > 0].mean()
 			m2 += diags(np.array(m2.sum(axis=-1) == 0).reshape((-1)).astype('float'))
-			m2 = m2 * scale_factor_cell
+			m2 = m2 * read_count_norm
 			# m2.data = np.log1p(m2.data)
 			
 			sparse_list_for_gcn.append(m2)
 			
 			m = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(cell_size, cell_size))
 			m = m + m.T - diags(m.diagonal())
-			m = m / (m.sum()+1e-15) * 100000
+			m = m / (m.sum() + 1e-15) * 100000
 			diag = m.diagonal(0)
-			m1 = m.sum()-diag.sum()
+			m1 = m.sum() - diag.sum()
 			m = laplacian(m, normed=True)
 			m = np.abs(m)
-			m = m / (m.sum()+1e-15) * m1
+			m = m / (m.sum() + 1e-15) * m1
 			m += diags(diag)
 			
 			cell_adj.append(m)
@@ -225,105 +242,131 @@ def create_matrix_one_chrom(c, size, cell_size, temp, temp_weight, chrom_start_e
 				scale_factor2 = int(1000000 / res)
 				size_metric = int(math.ceil(size * res / 1000000))
 				temp2_scale = np.floor(temp2 / scale_factor2).astype('int')
-				m1 = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(size_metric, size_metric))
-				m1 = m1 + m1.T
-				sparsity_metric.append(m1.reshape((1, -1)))
-				
+				# m1 = csr_matrix((temp_weight2, (temp2_scale[:, 0], temp2_scale[:, 1])), shape=(size_metric, size_metric))
+				# m1 = m1 + m1.T
+				# sparsity_metric.append(m1.reshape((1, -1)))
+			else:
+				size_metric = int(math.ceil(size * res / 1000000))
+			a.append(len(np.unique(temp2_scale, axis=0)))
+			b = int(size_metric * size_metric / 2)
+			
 		cell_adj = np.array(cell_adj)
 
-		if "batch_id" in config :
-			batch_id_info = fetch_batch_id(config, "batch_id")
-		elif "library_id" in config:
-			batch_id_info = fetch_batch_id(config, "library_id")
+		
+		
+		# if res_cell != 1000000:
+		# 	sparsity_metric = vstack(sparsity_metric).tocsr()
+		# 	a, b = check_sparsity(sparsity_metric)
+		# else:
+		# 	a, b = check_sparsity(cell_adj)
+		
+		if total_part_num == 1:
+			np.save(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
+			np.save(os.path.join(temp_dir, "temp", "sparse_gcn_%s.npy" % chrom_list[c]), np.array(sparse_list_for_gcn), allow_pickle=True)
+			np.save(os.path.join(temp_dir, "temp", "cell_adj_%s.npy" % chrom_list[c]), cell_adj,
+			        allow_pickle=True)
 		else:
-			batch_id_info = np.ones((cell_num))
-			
-		
-		bulk = np.sum(cell_adj, axis=0) / len(cell_adj)
-		
-		bulk_bin = []
-		for k in range(bulk.shape[0]):
-			bulk_bin.append(np.sum(bulk[k, :]) / (bulk.shape[0]))
-		bulk_bin = np.array(bulk_bin)
-		
-		batches = np.unique(batch_id_info)
-		for index, b in enumerate(batches):
-			b_bin = []
-			b_c = np.sum(cell_adj[batch_id_info == b], axis=0) / np.sum(batch_id_info == b)
-			for k in range(b_c.shape[0]):
-				b_bin.append(np.sum(b_c[k, :] ) / b_c.shape[0])
-			b_bin = np.array(b_bin)
-			
-			
-			if  spearmanr(b_bin[bulk_bin > 0.0], bulk_bin[bulk_bin > 0.0])[0] < 0.8:
-				print (c, "correct be for batch", b, spearmanr(b_bin[bulk_bin > 0.0], bulk_bin[bulk_bin > 0.0]))
-				for i in np.where(batch_id_info == b)[0]:
-					m = cell_adj[i]
-					row_sums = b_bin + 1e-15
-					row_indices, col_indices = m.nonzero()
-					m.data /= row_sums[row_indices]
-					m.data *= bulk_bin[row_indices]
-					
-					cell_adj[i] = m.reshape((1, -1))
-			else:
-				for i in np.where(batch_id_info == b)[0]:
-					m = cell_adj[i]
-					cell_adj[i] = m.reshape((1, -1))
-
-		cell_adj = vstack(cell_adj).tocsr()
-		
-		if res_cell != 1000000:
-			sparsity_metric = vstack(sparsity_metric).tocsr()
-			a, b = check_sparsity(sparsity_metric)
-		else:
-			a, b = check_sparsity(cell_adj)
-
-		np.save(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom_list[c]), sparse_list)
-		
-		return np.array(read_count).reshape((-1)), np.array(sparse_list_for_gcn), c, a, b, bin_adj, cell_adj
+			np.save(os.path.join(temp_dir, "temp", "%s_sparse_adj_part_%d.npy" % (chrom_list[c], part_num)), sparse_list)
+			np.save(os.path.join(temp_dir, "temp", "sparse_gcn_%s_part_%d.npy" % (chrom_list[c], part_num)), np.array(sparse_list_for_gcn),
+			        allow_pickle=True)
+			np.save(os.path.join(temp_dir, "temp", "cell_adj_%s_part_%d.npy" % (chrom_list[c], part_num)), cell_adj,
+			        allow_pickle=True)
+		return np.array(read_count).reshape((-1)), c, np.array(a), b, total_part_num, part_num, cell_id
 
 
 def create_or_overwrite(file, name="", data=0):
 	if name in file.keys():
-		file[name][...] = data
+		if type(data) is np.ndarray:
+			shape1 =  file[name].shape
+			flag = True
+			for i in range(len(shape1)):
+				if shape1[i] != data.shape[i]:
+					flag = False
+			if flag:
+				file[name][...] = data
+			else:
+				del file[name]
+				file.create_dataset(name=name, data=data)
+		else:
+			del file[name]
+			file.create_dataset(name=name, data=data)
 	else:
 		file.create_dataset(name=name, data=data)
 
+
+def create_inter_matrix(cell_num):
+	print ("generating interchromosomal contacts")
+	data = np.load(os.path.join(temp_dir, "inter_data.npy"))
+	weight = np.load(os.path.join(temp_dir, "inter_weight.npy"))
+	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
+	
+	n_bins = chrom_start_end[-1][-1]
+	import sparse
+	coor = data[:, [0, 3, 4]].T
+	print (coor, n_bins, np.min(coor, axis=1), np.max(coor, axis=1))
+	new_matrix = sparse.COO(coor, weight, shape=(cell_num, n_bins, n_bins))
+	print (new_matrix.shape)
+	
+	dense_in_cell = []
+	
+	for cell in trange(cell_num):
+		cell_matrix = new_matrix[cell]
+		cell_matrix = cell_matrix + cell_matrix.T
+		cell_matrix = cell_matrix.tocsr()
+		dense_in_cell.append(cell_matrix)
+	del new_matrix
+	
+	for c in trange(len(chrom_list)):
+		start, end = chrom_start_end[c, 0], chrom_start_end[c, 1]
+		chrom_cell_list = np.array([mtx[start:end, :] for mtx in dense_in_cell], dtype='object')
+		np.save(os.path.join(raw_dir, "%s_sparse_inter_adj.npy" % chrom_list[c]), chrom_cell_list)
+
 # Generate matrices for feats and baseline
 def create_matrix():
-	print ("generating contact maps for baseline")
+	print("generating contact maps for baseline")
 	data = np.load(os.path.join(temp_dir, "data.npy"))
 	weight = np.load(os.path.join(temp_dir, "weight.npy"))
+	
+	print ("data loaded")
+	if not os.path.exists(os.path.join(temp_dir, "temp")):
+		os.mkdir(os.path.join(temp_dir, "temp"))
 
-
-
-	cell_num = np.max(data[:, 0]) + 1
+	cell_num = int(np.max(data[:, 0]) + 1)
+	
+	# if keep_inter:
+	# 	create_inter_matrix(cell_num=cell_num)
+	
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
-
+	
 	data_within_chrom_list = []
 	weight_within_chrom_list = []
-	pool = ProcessPoolExecutor(max_workers=23)
+	pool = ProcessPoolExecutor(max_workers=cpu_num)
 	p_list = []
-
+	
 	cell_feats = [[] for i in range(len(chrom_list))]
 	sparse_chrom_list = [[] for i in range(len(chrom_list))]
-
+	
 	save_mem = False
-
-	print (len(data), save_mem)
+	
+	print(len(data), save_mem)
 	pca_flag = False
 
-	total_reads, total_possible = 0, 0
-	with h5py.File(os.path.join(temp_dir, "node_feats.hdf5"), "w") as save_file:
+	total_reads, total_possible = np.zeros(cell_num), 0
+	with h5py.File(os.path.join(temp_dir, "node_feats.hdf5"), "a") as save_file:
+		c2total_part_num = {}
 		for c in range(len(chrom_list)):
-			temp = data[data[:, 1] == c]
-			temp_weight = weight[data[:, 1] == c]
+			mask = data[:, 1] == c
+			temp = data[mask]
+			temp_weight = weight[mask]
 
-			if len(temp) > 7e7:
+			data = data[~mask]
+			weight = weight[~mask]
+
+			if len(temp) > 5e5:
 				save_mem = True
 			else:
 				save_mem = False
-			
+
 			print (chrom_list[c], "save_mem", save_mem)
 			size = chrom_start_end[c, 1] - chrom_start_end[c, 0]
 
@@ -335,81 +378,158 @@ def create_matrix():
 			data_within_chrom_list.append(np.copy(temp))
 			weight_within_chrom_list.append(np.copy(temp_weight))
 
-
-
-			chrom2celladj = {}
-			
-			total_linear_chrom_size = 0.0
+			per_cell_read = np.sum(temp_weight) / cell_num
 
 			if save_mem:
-				chrom_count, non_diag_sparse, c, a, b, bin_adj, cell_adj = create_matrix_one_chrom( c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, pca_flag)
-				if "%d" % c in save_file.keys():
-					save_file["%d" % c][...] = bin_adj
-				else:
-					save_file.create_dataset(name="%d" % c, data=bin_adj)
-
-
-
-				total_reads += a.reshape((-1))
-				total_possible += float(b)
-				cell_feats[c] = chrom_count
-				sparse_chrom_list[c] = non_diag_sparse
-
-				chrom2celladj[c] = cell_adj
-				total_linear_chrom_size += int(math.sqrt(list(cell_adj.shape)[-1]) * res_cell / 1000000)
-
+				split_num = int(math.floor(len(temp) / 5e6))
+				print (chrom_list[c], "split_num", split_num)
+				cell_id = np.array_split(np.arange(cell_num), split_num)
+				for part in range(split_num):
+					mask = np.isin(temp[:, 0], cell_id[part])
+					p_list.append(
+						pool.submit(create_matrix_one_chrom, c, size, cell_size, temp[mask], temp_weight[mask], chrom_start_end,
+						            cell_id[part], pca_flag, split_num, part, per_cell_read))
+					# create_matrix_one_chrom( c, size, cell_size, temp[mask], temp_weight[mask], chrom_start_end,
+					# cell_id[part], pca_flag, split_num, part, per_cell_read)
+				cell_feats[c] = [[] for p in range(split_num)]
+				c2total_part_num[c] = split_num
 			else:
 				p_list.append(
-					pool.submit(create_matrix_one_chrom, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, pca_flag))
+					pool.submit(create_matrix_one_chrom, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, pca_flag, 1, 0, per_cell_read))
+				cell_feats[c] = [[]]
+				c2total_part_num[c] = 1
+			temp_mask = temp
+			temp_weight_mask = temp_weight
+			bin_adj = csr_matrix((temp_weight_mask, (temp_mask[:, 2]- chrom_start_end[c, 0], temp_mask[:, 3]- chrom_start_end[c, 0])), shape=(size, size))
+			bin_adj = np.array(bin_adj.todense())
+			bin_adj = bin_adj + bin_adj.T - np.diag(np.diagonal(bin_adj)) + np.eye(len(bin_adj))
+			bin_adj = sqrt_norm(bin_adj)
+
+			if pca_flag:
+				size1 = int(0.2 * len(bin_adj))
+				U, s, Vt = pca(bin_adj, k=size1, raw=True)  # Automatically centers.
+				bin_adj = np.array(U[:, :size1] * s[:size1])
+			create_or_overwrite(save_file, "%d" % c, bin_adj)
 
 
-		if len(p_list) > 0:
-			for p in as_completed(p_list):
-				chrom_count, non_diag_sparse, c, a, b, bin_adj, cell_adj = p.result()
-				if "%d" % c in save_file.keys():
-					save_file["%d" % c][...] = bin_adj
-				else:
-					save_file.create_dataset(name="%d" % c, data=bin_adj)
-
-				chrom2celladj[c] = cell_adj
-				total_linear_chrom_size += int(math.sqrt(list(cell_adj.shape)[-1]) * res_cell / 1000000)
+		for p in as_completed(p_list):
+			chrom_count, c, a, b, total_part_num, part_num, cell_id = p.result()
+			total_reads[cell_id] += a.reshape((-1))
+			total_possible += float(b) / total_part_num
+			cell_feats[c][part_num] = chrom_count
 
 
-				total_reads += a.reshape((-1))
-				total_possible += float(b)
-				cell_feats[c] = chrom_count
-				sparse_chrom_list[c] = non_diag_sparse
+		for c in range(len(chrom_list)):
+			cell_feats[c] = np.concatenate(cell_feats[c])
 		pool.shutdown(wait=True)
 
+		chrom2celladj = {}
+
+		total_linear_chrom_size = 0.0
+
+		for c in range(len(chrom_list)):
+			total_part_num = c2total_part_num[c]
+			if total_part_num == 1:
+				non_diag_sparse_all = np.load(os.path.join(temp_dir, "temp", "sparse_gcn_%s.npy" % chrom_list[c]),
+				                          allow_pickle=True)
+				cell_adj_all = np.load(os.path.join(temp_dir, "temp", "cell_adj_%s.npy" % chrom_list[c]),
+				                   allow_pickle=True)
+			else:
+				non_diag_sparse_all = []
+				cell_adj_all = []
+				origin_sparse_list = []
+				for pt in range(total_part_num):
+					non_diag_sparse_all.append(np.load(
+						os.path.join(temp_dir, "temp", "sparse_gcn_%s_part_%d.npy" % (chrom_list[c], pt)),
+						allow_pickle=True))
+					cell_adj_all.append(np.load(
+						os.path.join(temp_dir, "temp", "cell_adj_%s_part_%d.npy" % (chrom_list[c], pt)),
+						allow_pickle=True))
+					origin_sparse_list.append(np.load(os.path.join(temp_dir, "temp","%s_sparse_adj_part_%d.npy" % (chrom_list[c], pt)),
+					                                  allow_pickle=True))
+
+				non_diag_sparse_all = np.concatenate(non_diag_sparse_all)
+				cell_adj_all = np.concatenate(cell_adj_all)
+				origin_sparse_list = np.concatenate(origin_sparse_list)
+				np.save(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom_list[c]), origin_sparse_list)
+
+
+			sparse_chrom_list[c] = non_diag_sparse_all
+
+
+			if "batch_id" in config:
+				batch_id_info = fetch_batch_id(config, "batch_id")
+			elif "library_id" in config:
+				batch_id_info = fetch_batch_id(config, "library_id")
+			else:
+				batch_id_info = np.ones((cell_num))
+
+			bulk = np.sum(cell_adj_all, axis=0) / len(cell_adj_all)
+
+			bulk_bin = []
+			for k in range(bulk.shape[0]):
+				bulk_bin.append(np.sum(bulk[k, :]) / (bulk.shape[0]))
+			bulk_bin = np.array(bulk_bin)
+
+			batches = np.unique(batch_id_info)
+			for index, b in enumerate(batches):
+				b_bin = []
+				b_c = np.sum(cell_adj_all[batch_id_info == b], axis=0) / np.sum(batch_id_info == b)
+				for k in range(b_c.shape[0]):
+					b_bin.append(np.sum(b_c[k, :]) / b_c.shape[0])
+				b_bin = np.array(b_bin)
+
+				if spearmanr(b_bin[bulk_bin > 0.0], bulk_bin[bulk_bin > 0.0])[0] < 0.8:
+					print(c, "correct be for batch", b, spearmanr(b_bin[bulk_bin > 0.0], bulk_bin[bulk_bin > 0.0]))
+					for i in np.where(batch_id_info == b)[0]:
+						m = cell_adj_all[i]
+						row_sums = b_bin + 1e-15
+						row_indices, col_indices = m.nonzero()
+						m.data /= row_sums[row_indices]
+						m.data *= bulk_bin[row_indices]
+
+						cell_adj_all[i] = m.reshape((1, -1))
+				else:
+					for i in np.where(batch_id_info == b)[0]:
+						m = cell_adj_all[i]
+						cell_adj_all[i] = m.reshape((1, -1))
+
+			cell_adj_all = vstack(cell_adj_all).tocsr()
+			np.save(os.path.join(raw_dir, "%s_cell_adj2.npy" % chrom_list[c]), cell_adj_all)
+		# 	cell_adj_all  = np.load(os.path.join(raw_dir, "%s_cell_adj2.npy" % chrom_list[c]), allow_pickle=True).item()
+			chrom2celladj[c] = cell_adj_all
+			total_linear_chrom_size += int(math.sqrt(list(cell_adj_all.shape)[-1]) * res_cell / 1000000)
+		print (total_linear_chrom_size)
 		pool = ProcessPoolExecutor(max_workers=cpu_num)
 		if len(chrom_list) > 1:
-
-			total_embed_size = min(max(int(cell_adj.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)),
-								   int(cell_adj.shape[0] * 1.3))
+			total_embed_size = min(max(int(cell_adj_all.shape[0] * 0.5), int(total_linear_chrom_size * 0.5)),
+			                       int(cell_adj_all.shape[0] * 1.3))
 		else:
-			total_embed_size = int(np.min(cell_adj.shape) * 0.8)
+			total_embed_size = int(np.min(cell_adj_all.shape) * 0.8)
+		total_embed_size = min(total_embed_size, 2000)
 		print("total_feats_size", total_embed_size)
 		p_list = []
-
+		
 		for c in range(len(chrom_list)):
 			temp = chrom2celladj[c]
 			p_list.append(pool.submit(generate_feats_one, temp, total_embed_size, total_linear_chrom_size, c))
-
+		
+		bar = trange(len(chrom_list))
 		if "cell" not in save_file.keys():
 			save_file_cell = save_file.create_group("cell")
 		else:
 			save_file_cell = save_file["cell"]
-
+		
 		for p in as_completed(p_list):
 			temp1, c = p.result()
-
+			bar.update(1)
 			if "%d" % c in save_file_cell.keys():
-				save_file_cell["%d" % c][...]= temp1
+				save_file_cell["%d" % c][...] = temp1
 			else:
 				save_file_cell.create_dataset(name="%d" % c, data=temp1)
-
+		bar.close()
 		pool.shutdown(wait=True)
-
+		
 		total_sparsity = total_reads / total_possible
 		print("sparsity", total_sparsity.shape, total_sparsity, np.median(total_sparsity))
 
@@ -435,7 +555,7 @@ def create_matrix():
 		num = [np.max(data[:, 0]) + 1]
 		for c in chrom_start_end:
 			num.append(c[1] - c[0])
-
+		print (num)
 		# np.save(os.path.join(temp_dir, "num.npy"), num)
 		create_or_overwrite(save_file, "num", data=num)
 
@@ -464,9 +584,8 @@ def create_matrix():
 		create_or_overwrite(save_file, "chrom", data=chrom_info)
 		create_or_overwrite(save_file, "weight", data=weight)
 
-
 		distance = data[:, 2] - data[:, 1]
-		info = pd.DataFrame({'dis': distance, 'weight': weight, 'cell':data[:, 0]})
+		info = pd.DataFrame({'dis': distance, 'weight': weight, 'cell': data[:, 0]})
 		info1 = info.groupby(by='dis').mean().reset_index()
 		print(info1)
 		max_bin1 = int(np.max(num[2:]))
@@ -480,10 +599,9 @@ def create_matrix():
 		cell2weight[np.array(info1['cell']), 0] = np.array(info1['weight'])
 		create_or_overwrite(save_file, "cell2weight", data=cell2weight)
 
-
-
-
-
+		shutil.rmtree(os.path.join(temp_dir, "temp"))
+	
+		
 # Code from scHiCluster
 def neighbor_ave_gpu(A, pad, device):
 	if pad == 0:
@@ -554,51 +672,57 @@ def impute_all():
 	get_free_gpu()
 	
 	print("start conv random walk (scHiCluster) as baseline")
-	sc_list = []
-	for c in impute_list:
-		a = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
-		if "minimum_impute_distance" in config:
-			min_bin_ = int(config["minimum_impute_distance"] / res)
-		else:
-			min_bin_ = min_bin
-		
-		if "maximum_impute_distance" in config:
-			if config["maximum_impute_distance"] < 0:
-				max_bin_ = int(1e5)
+	# sc_list = []
+	with h5py.File(os.path.join(rw_dir, "schicluster.hdf5"), "w") as hicluster_f:
+		for c in impute_list:
+			a = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
+			if "minimum_impute_distance" in config:
+				min_bin_ = int(config["minimum_impute_distance"] / res)
 			else:
-				max_bin_ = int(config["maximum_impute_distance"] / res)
-		else:
-			max_bin_ = max_bin
-
-		# Minus one because the generate_binpair function would add one in the function
-		samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
-		with h5py.File(os.path.join(rw_dir, "rw_%s.hdf5" % c), "w") as f:
-			f.create_dataset('coordinates', data = samples)
-			for i, m in enumerate(tqdm(a)):
-				m = np.array(m.todense())
-				m = impute_gpu(np.array(m))
-				v = m[samples[:, 0], samples[:, 1]]
-				#
-				f.create_dataset("cell_%d" % (i), data=v)
-				
-
+				min_bin_ = min_bin
+			
+			if "maximum_impute_distance" in config:
+				if config["maximum_impute_distance"] < 0:
+					max_bin_ = int(1e5)
+				else:
+					max_bin_ = int(config["maximum_impute_distance"] / res)
+			else:
+				max_bin_ = max_bin
+			# matrix_list = []
+			# Minus one because the generate_binpair function would add one in the function
+			samples = generate_binpair(0, a[0].shape[0], min_bin_, max_bin_) - 1
+			with h5py.File(os.path.join(rw_dir, "rw_%s.hdf5" % c), "w") as f:
+				f.create_dataset('coordinates', data = samples)
+				for i, m in enumerate(tqdm(a)):
+					m = np.array(m.todense())
+					m = impute_gpu(np.array(m))
+					v = m[samples[:, 0], samples[:, 1]]
+					# matrix_list.append(m.reshape((-1)))
+					f.create_dataset("cell_%d" % (i), data=v)
+			# matrix_list = np.stack(matrix_list, axis=0)
+			# model = PCA(n_components=int(min(matrix_list.shape) * 0.2) - 1)
+			# matrix_list = model.fit_transform(matrix_list)
+			# hicluster_f.create_dataset("%s_vec" % c, data=matrix_list)
+			# hicluster_f.create_dataset("%s_var" % c, data=model.explained_variance_)
+	
 
 # generate feats for cell and bin nodes (one chromosome, multiprocessing)
 def generate_feats_one(temp, total_embed_size, total_chrom_size, c):
 	if temp.shape[0] > 3:
-		mask = np.array(np.sum(temp > 0, axis=0) > min(5, temp.shape[0]-2))
+		mask = np.array(np.sum(temp > 0, axis=0) > min(5, temp.shape[0] - 2))
 		mask = mask.reshape((-1))
 		
 		length = int(np.sqrt(temp.shape[-1]) / 1000000 * res_cell)
 		size = int(total_embed_size / total_chrom_size * length) + 1
 		
-		temp = normalize(temp, norm='l1', axis=1) * 100000
+		temp = normalize(temp, norm='l1', axis=1) * length
+		temp.data = np.log1p(temp.data)
 		# print (temp.shape, total_embed_size, total_chrom_size, length, size)
 		temp = temp[:, mask]
-		
-		
+		print (c, size)
+		np.random.seed(0)
 		U, s, Vt = pca(temp, k=size)  # Automatically centers.
-		temp1 =  np.array(U[:, :size] * s[:size])
+		temp1 = np.array(U[:, :size] * s[:size])
 	else:
 		temp1 = np.eye(temp.shape[0])
 
@@ -616,10 +740,10 @@ def process_signal_one(chrom):
 	subprocess.call(cmd)
 
 def process_signal():
-	print ("co-assay mode")
+	print("co-assay mode")
 	signal_file = h5py.File(os.path.join(data_dir, "sc_signal.hdf5"), "r")
 	signal_names = config["coassay_signal"]
-	chrom2signals = {chrom:[] for chrom in chrom_list}
+	chrom2signals = {chrom: [] for chrom in chrom_list}
 	for signal in signal_names:
 		one_signal_stack = []
 		signal_file_one = signal_file[signal]
@@ -776,8 +900,10 @@ chrom_list = config['chrom_list']
 impute_list = config['impute_list']
 res = config['resolution']
 res_cell = config['resolution_cell']
+
 scale_factor = int(res_cell / res)
 print ("scale_factor", scale_factor)
+
 
 
 data_dir = config['data_dir']
@@ -807,7 +933,10 @@ if cpu_num < 0:
 
 gpu_num = config['gpu_num']
 
-
+if 'keep_inter' in config:
+	keep_inter = config['keep_inter']
+else:
+	keep_inter = False
 	
 max_distance = config['maximum_distance']
 if max_distance < 0:

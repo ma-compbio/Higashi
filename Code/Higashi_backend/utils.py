@@ -255,18 +255,19 @@ def get_neighbor_mask():
 			count += 1
 	return neighbor_mask
 
-def remove_BE_linear(temp1, config, data_dir):
+def remove_BE_linear(temp1, config, data_dir, cell_feats1):
 	if "batch_id" in config:
 		print ("initial removing BE")
 		if type(temp1) is list:
 			temp1 = np.concatenate(temp1, axis=-1)
-
-		batch_id_info = np.array(pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]).reshape((-1))
-		new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
-		for i, u in enumerate(np.unique(batch_id_info)):
-			new_batch_id_info[batch_id_info == u, i] += 1
-		batch_id_info = np.array(new_batch_id_info)
-		temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
+		cell_feats1 = cell_feats1.detach().cpu().numpy()
+		temp1 = temp1 - LinearRegression().fit(cell_feats1, temp1).predict(cell_feats1)
+		# batch_id_info = np.array(pickle.load(open(os.path.join(data_dir, "label_info.pickle"), "rb"))[config["batch_id"]]).reshape((-1))
+		# new_batch_id_info = np.zeros((len(batch_id_info), len(np.unique(batch_id_info))))
+		# for i, u in enumerate(np.unique(batch_id_info)):
+		# 	new_batch_id_info[batch_id_info == u, i] += 1
+		# batch_id_info = np.array(new_batch_id_info)
+		# temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
 
 
 	else:

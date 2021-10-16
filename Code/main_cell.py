@@ -551,7 +551,9 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 
 	best_train_loss = 1000
 	
-	
+	if save_embed:
+		save_embeddings(model)
+		
 	for epoch_i in range(epochs):
 		if save_embed:
 			save_embeddings(model)
@@ -689,13 +691,13 @@ def generate_attributes():
 			embeddings.append(cell_node_feats)
 		else:
 			if num[0] >= 10:
-				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
+				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir, cell_feats1)
 				cell_node_feats1 = StandardScaler().fit_transform(cell_node_feats1.reshape((-1, 1))).reshape((len(cell_node_feats1), -1))
 				cell_node_feats2 = [StandardScaler().fit_transform(x) for x in cell_node_feats]
-				cell_node_feats2 = remove_BE_linear(cell_node_feats2, config, data_dir)
+				cell_node_feats2 = remove_BE_linear(cell_node_feats2, config, data_dir, cell_feats1)
 				cell_node_feats2 = StandardScaler().fit_transform(cell_node_feats2.reshape((-1, 1))).reshape((len(cell_node_feats2), -1))
 			else:
-				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir)
+				cell_node_feats1 = remove_BE_linear(cell_node_feats, config, data_dir, cell_feats1)
 				cell_node_feats2 = cell_node_feats1
 				
 			targets.append(cell_node_feats2.astype('float32'))
@@ -885,6 +887,7 @@ if __name__ == '__main__':
 	neighbor_num = config['neighbor_num'] + 1
 	config_name = config['config_name']
 	mode = config["loss_mode"]
+	print ("loss mode", mode)
 	if mode == 'rank':
 		rank_thres = config['rank_thres']
 	embedding_name = config['embedding_name']
@@ -1092,7 +1095,9 @@ if __name__ == '__main__':
 		
 		train_weight, test_weight = transform_weight_class(train_weight, train_weight_mean, neg_num), \
 									transform_weight_class(test_weight, train_weight_mean, neg_num)
-	
+	elif mode == 'rank':
+		weight += 1
+		
 	# Constructing the model
 	node_embedding_init = MultipleEmbedding(
 		embeddings_initial,

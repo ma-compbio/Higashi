@@ -7,6 +7,7 @@ def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi CpG_density")
 	parser.add_argument('-g', '--genome_reference', type=str, default="./hg38.fa")
 	parser.add_argument('-w', '--window', type=int, default='1000000')
+	parser.add_argument('-o', '--output', type=str, default="./cpg_density.txt")
 	return parser.parse_args()
 
 
@@ -44,7 +45,7 @@ args = parse_args()
 
 f = open(args.genome_reference, "r")
 line = f.readline()
-output = open("cpg_density.txt", "w")
+output = open(args.output, "w")
 
 bin_count = 0
 chrom = ""
