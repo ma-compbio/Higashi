@@ -1162,7 +1162,10 @@ class DataGenerator():
 			self.edge_weight[i] = edge_weight[mask]
 			self.edge_chrom[i] = edge_chrom[mask]
 			
-			
+			if len(self.edges[i]) == 0:
+				print ("The %d th chrom in your chrom_list has no sample in this generator" % i)
+				continue
+				
 			while len(self.edges[i]) <= (self.batch_size):
 				self.edges[i] = np.concatenate([self.edges[i], self.edges[i]])
 				self.edge_weight[i] = np.concatenate([self.edge_weight[i], self.edge_weight[i]])
@@ -1187,6 +1190,9 @@ class DataGenerator():
 		batch_size = int(batch_size)
 		
 		for chrom in chroms:
+			if len(self.edges[chrom]) == 0:
+				continue
+				
 			self.pointer[chrom] += batch_size
 			
 			if self.pointer[chrom] > len(self.edges[chrom]):

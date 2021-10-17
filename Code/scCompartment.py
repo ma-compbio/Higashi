@@ -97,7 +97,7 @@ def process_one_chrom(chrom):
 	
 	bulk_compartment_all = []
 	real_bulk_compartment_all = []
-	temp_compartment_list_all = [[] for i in range(len(slice_start_list))]
+	
 	bulk_model_list = []
 	bulk_reverse_list = []
 	bulk_slice_list = []
@@ -109,9 +109,9 @@ def process_one_chrom(chrom):
 		
 		bulk1_slice = bulk1[slice_start:slice_end, :]
 		bulk1_slice = bulk1_slice[:, slice_start:slice_end]
-		use_rows = np.where(np.sum(bulk1_slice > 0, axis=-1) > 0.1 * len(bulk1_slice))[0]
+		use_rows = np.where(np.sum(bulk1_slice > 0, axis=-1) > 0.01 * len(bulk1_slice))[0]
 		if len(use_rows) <= 1:
-			# print("no use", slice_start, slice_end)
+			print("no use", slice_start, slice_end)
 			continue
 		use_rows_all.append(np.arange(slice_start, slice_end)[use_rows])
 		use_rows_list.append(use_rows)
@@ -166,7 +166,7 @@ def process_one_chrom(chrom):
 	else:
 		impute_f =  h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)),
 		               "r")
-		
+	temp_compartment_list_all = [[] for i in range(len(use_rows_list))]
 	coordinates = impute_f['coordinates']
 	xs, ys = coordinates[:, 0], coordinates[:, 1]
 	cell_list = trange(len(list(impute_f.keys())) - 1)
@@ -179,11 +179,10 @@ def process_one_chrom(chrom):
 		temp = temp + temp.T
 		temp *= mask
 		
-		for j in range(len(slice_start_list)):
+		for j in range(len(use_rows_list)):
 			slice_start, slice_end = slice_start_list[j], slice_end_list[j]
 			temp_slice = temp[slice_start:slice_end, :]
 			temp_slice = temp_slice[:, slice_start:slice_end]
-			
 			temp_select = temp_slice[use_rows_list[j], :]
 			temp_select = temp_select[:, use_rows_list[j]]
 			temp_select = rankmatch(temp_select, bulk_slice_list[j])
@@ -191,7 +190,7 @@ def process_one_chrom(chrom):
 			if bulk_reverse_list[j]:
 				temp_compartment = -1 * temp_compartment
 			temp_compartment_list_all[j].append(temp_compartment.reshape((-1)))
-	for j in range(len(slice_start_list)):
+	for j in range(len(use_rows_list)):
 		temp_compartment_list_all[j] = np.stack(temp_compartment_list_all[j], axis=0)
 		temp_compartment_list_quantile.append(quantile_transform(temp_compartment_list_all[j], output_distribution='uniform',
 		                                           n_quantiles=int(temp_compartment_list_all[j].shape[-1] * 1.0), axis=1))
@@ -239,11 +238,12 @@ def start_call_compartment():
 	with h5py.File(os.path.join(temp_dir, output), "w") as output_f:
 		result = {}
 		for chrom in chrom_list:
-			p_list.append(pool.submit(process_one_chrom, chrom))
-
-
-		for p in as_completed(p_list):
-			real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = p.result()
+			real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = process_one_chrom(chrom)
+		# 	p_list.append(pool.submit(process_one_chrom, chrom))
+		# 
+		# 
+		# for p in as_completed(p_list):
+		# 	real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, chrom, use_rows, size = p.result()
 			result[chrom] = [real_bulk_compartment, bulk_compartment, temp_compartment_list, temp_compartment_zscore, temp_compartment_quantile, use_rows, size]
 			
 		bin_chrom_list = []
