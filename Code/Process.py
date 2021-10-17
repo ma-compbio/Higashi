@@ -381,7 +381,7 @@ def create_matrix():
 			per_cell_read = np.sum(temp_weight) / cell_num
 
 			if save_mem:
-				split_num = int(math.floor(len(temp) / 5e6))
+				split_num = int(math.floor(len(temp) / 5e5))
 				print (chrom_list[c], "split_num", split_num)
 				cell_id = np.array_split(np.arange(cell_num), split_num)
 				for part in range(split_num):
