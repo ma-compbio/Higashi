@@ -111,7 +111,7 @@ def process_one_chrom(chrom):
 		bulk1_slice = bulk1_slice[:, slice_start:slice_end]
 		use_rows = np.where(np.sum(bulk1_slice > 0, axis=-1) > 0.01 * len(bulk1_slice))[0]
 		if len(use_rows) <= 1:
-			print("no use", slice_start, slice_end)
+			print("no reliable bins in slice:", slice_start, slice_end)
 			continue
 		use_rows_all.append(np.arange(slice_start, slice_end)[use_rows])
 		use_rows_list.append(use_rows)
