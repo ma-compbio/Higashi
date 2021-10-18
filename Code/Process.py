@@ -523,10 +523,8 @@ def create_matrix():
 		for p in as_completed(p_list):
 			temp1, c = p.result()
 			bar.update(1)
-			if "%d" % c in save_file_cell.keys():
-				save_file_cell["%d" % c][...] = temp1
-			else:
-				save_file_cell.create_dataset(name="%d" % c, data=temp1)
+			create_or_overwrite(save_file_cell, "%d" % c, data=temp1)
+			
 		bar.close()
 		pool.shutdown(wait=True)
 		
