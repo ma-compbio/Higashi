@@ -208,20 +208,22 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 		y.view(-1), pred.view(-1)), auc1, auc2, str1, str2
 
 
-def eval_epoch(model, loss_func, validation_data_generator):
+def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
 	"""Epoch operation in evaluation phase"""
 	bce_total_loss = 0
 	model.eval()
 	with torch.no_grad():
-		auc1_list, auc2_list, acc_list = [], [], []
-		pool = ProcessPoolExecutor(max_workers=cpu_num)
-		p_list = []
+		y_list, w_list, pred_list = [], [], []
+		
 		bar = tqdm(range(update_num_per_eval_epoch), desc='  - (Validation)   ', leave=False)
+		if p_list is None:
+			pool = ProcessPoolExecutor(max_workers=cpu_num)
+			p_list = []
 
-		for i in range(update_num_per_eval_epoch):
-			edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
-			p_list.append(
-				pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False))
+			for i in range(update_num_per_eval_epoch):
+				edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
+				p_list.append(
+					pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False))
 
 		for p in as_completed(p_list):
 			batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs = p.result()
@@ -233,17 +235,29 @@ def eval_epoch(model, loss_func, validation_data_generator):
 			
 			
 			bce_total_loss += eval_loss.item()
-			auc1, auc2, str1, str2 = roc_auc_cuda(batch_w, pred_batch)
-			auc1_list.append(auc1)
-			auc2_list.append(auc2)
-			acc_list.append(accuracy(pred_batch, batch_y))
+			
+			y_list.append(batch_y.detach().cpu())
+			w_list.append(batch_w.detach().cpu())
+			pred_list.append(pred_batch.detach().cpu())
+			
+			# auc1, auc2, str1, str2 = roc_auc_cuda(batch_w, pred_batch)
+			# auc1_list.append(auc1)
+			# auc2_list.append(auc2)
+			# acc_list.append(accuracy(pred_batch, batch_y))
 			bar.update(n=1)
 			bar.set_description(" - (Validation) BCE:  %.3f MSE: %.3f " %
 								(eval_loss.item(), eval_mse.item()),
 								refresh=False)
 			
 		bar.close()
-	return bce_total_loss / (i + 1), np.mean(acc_list), np.mean(auc1_list), np.mean(auc2_list), str1, str2
+		
+		y = torch.cat(y_list)
+		w = torch.cat(w_list)
+		pred = torch.cat(pred_list)
+		
+		auc1, auc2, str1, str2 = roc_auc_cuda(w, pred)
+		
+	return bce_total_loss / (len(p_list)), accuracy(y.view(-1), pred.view(-1)), auc1, auc2, str1, str2
 
 
 def check_nonzero(x, c):
@@ -379,6 +393,16 @@ def to_neighs_to_mask(to_neighs):
 	
 	return (row_indices,column_indices,  v, unique_nodes_list)
 
+def sum_duplicates(col, data):
+	order = np.argsort(col)
+	col = col[order]
+	data = data[order]
+	unique_mask = (col[1:] != col[:-1])
+	unique_mask = np.append(True, unique_mask)
+	col = col[unique_mask]
+	unique_inds, = np.nonzero(unique_mask)
+	data = np.add.reduceat(data, unique_inds)
+	return col, data
 
 def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1, training=False):
 	if neg_num == 0:
@@ -427,18 +451,30 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 					M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
 			else:
 				if weighted_adj:
-					row = 0
+					# row = 0
+					# for nbr_cell in cell_neighbor_list[cell_id]:
+					# 	balance_weight = weight_dict[(nbr_cell, cell_id)]
+					# 	temp = balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
+					#
+					# 	# if training and (nbr_cell == cell_id) and (remove_or_not[i] >= 0.6):
+					# 	# 	if len(temp.data) > 1:
+					# 	# 		temp[0, remove_bin_id - 1 - num_list[c]] = 0
+					# 	row = row + temp
+					# M, N = row.shape
+					# indptr, nbrs, nbr_value = get_csr_submatrix(
+					# 	M, N, row.indptr, row.indices, row.data, 0, 1, 0, N)
+					
+					row_record, row_weight_record = [], []
 					for nbr_cell in cell_neighbor_list[cell_id]:
 						balance_weight = weight_dict[(nbr_cell, cell_id)]
-						temp = balance_weight * sparse_chrom_list[c][nbr_cell - 1][bin_id - 1 - num_list[c]]
-
-						if training and (nbr_cell == cell_id) and (remove_or_not[i] >= 0.6):
-							if len(temp.data) > 1:
-								temp[0, remove_bin_id - 1 - num_list[c]] = 0
-						row = row + temp
-					nbrs = row.nonzero()
-					nbr_value = np.array(
-						row[nbrs[0], nbrs[1]]).reshape((-1))
+						mtx = sparse_chrom_list_GCN[c][nbr_cell - 1]
+						row = bin_id - 1 - num_list[c]
+						M, N = mtx.shape
+						indptr, nbrs_pt, nbr_value_pt = get_csr_submatrix(
+							M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
+						row_record.append(nbrs_pt)
+						row_weight_record.append(nbr_value_pt * balance_weight)
+					nbrs, nbr_value = sum_duplicates(np.concatenate(row_record), np.concatenate(row_weight_record))
 				else:
 					mtx = sparse_chrom_list_GCN[c][cell_id - 1]
 					row = bin_id - 1 - num_list[c]
@@ -560,6 +596,14 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 		
 		print('[ Epoch', epoch_i, 'of', epochs, ']')
 		
+		pool = ProcessPoolExecutor(max_workers=cpu_num)
+		eval_p_list = []
+		
+		for i in range(update_num_per_eval_epoch):
+			edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
+			eval_p_list.append(
+				pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False))
+		
 		start = time.time()
 		
 		bce_loss, mse_loss, train_accu, auc1, auc2, str1, str2 = train_epoch(
@@ -580,7 +624,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 		
 			
 		start = time.time()
-		valid_bce_loss, valid_accu, valid_auc1, valid_auc2, str1, str2 = eval_epoch(model, loss, validation_data_generator)
+		valid_bce_loss, valid_accu, valid_auc1, valid_auc2, str1, str2 = eval_epoch(model, loss, validation_data_generator, eval_p_list)
 		print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
 			  '  acc: {accu:3.3f} %,'
 			  '{str1}: {auc1:3.3f}, {str2}: {auc2:3.3f},'
@@ -812,7 +856,6 @@ def get_cell_neighbor(start=1):
 
 		cell_neighbor_list[i + 1] = (neighbor_new + 1)[start:]
 		cell_neighbor_weight_list[i + 1] = (new_w)
-	
 	
 	return np.array(cell_neighbor_list), np.array(cell_neighbor_weight_list)
 
@@ -1338,7 +1381,7 @@ if __name__ == '__main__':
 		# Training Stage 3
 		print ("getting cell nbr's nbr list")
 
-		if remove_be_flag:
+		if remove_be_flag and ("batch_id" in config):
 			cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor_be(nbr_mode)
 		else:
 			cell_neighbor_list, cell_neighbor_weight_list = get_cell_neighbor(nbr_mode)
