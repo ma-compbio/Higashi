@@ -31,16 +31,16 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 		a = np.ones_like((a)) - a
 	
 	gap = np.sum(final, axis=-1, keepdims=False) == 0
-	
-	gap_tab = pd.read_table(cytoband_path, sep="\t", header=None)
-	gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
-	gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
-	start = np.floor((np.array(gap_list['start']) - 1000000) / res).astype('int')
-	end = np.ceil((np.array(gap_list['end']) + 1000000) / res).astype('int')
-	
-	for s, e in zip(start, end):
-		a[s:e, :] = 1
-		a[:, s:e] = 1
+	if cytoband_path is not None:
+		gap_tab = pd.read_table(cytoband_path, sep="\t", header=None)
+		gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
+		gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
+		start = np.floor((np.array(gap_list['start']) - 1000000) / res).astype('int')
+		end = np.ceil((np.array(gap_list['end']) + 1000000) / res).astype('int')
+		
+		for s, e in zip(start, end):
+			a[s:e, :] = 1
+			a[:, s:e] = 1
 	a[gap, :] = 1
 	a[:, gap] = 1
 	
@@ -221,7 +221,10 @@ config = get_config(args.config)
 res = config['resolution']
 temp_dir = config['temp_dir']
 raw_dir = os.path.join(temp_dir, "raw")
-cytoband_path = config['cytoband_path']
+if 'cytoband_path' in config:
+	cytoband_path = config['cytoband_path']
+else:
+	cytoband_path = None
 data_dir = config['data_dir']
 neighbor_num = config['neighbor_num']
 embedding_name = config['embedding_name']

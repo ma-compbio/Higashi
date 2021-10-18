@@ -39,31 +39,33 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 		a = np.ones_like((a)) - a
 	
 	gap = np.sum(final, axis=-1, keepdims=False) == 0
-	
-	gap_tab = pd.read_table(cytoband_path, sep="\t", header=None)
-	gap_tab.columns = ['chrom', 'start', 'end', 'name', 'type']
-	
-	name = np.array(gap_tab['name'])
-	# print (name)
-	pqarm = np.array([str(s)[0] for s in name])
-	gap_tab['pq_arm'] = pqarm
-	gap_tab['length'] = gap_tab['end'] - gap_tab['start']
-	summarize = gap_tab.groupby(['chrom', 'pq_arm']).sum().reset_index()
-	# print (summarize)
-	
-	if np.sum(summarize['pq_arm'] == 'p') > 0:
-		split_point = \
-		np.ceil(np.array(summarize[(summarize['chrom'] == chrom) & (summarize['pq_arm'] == 'p')]['length']) / res)[0]
+	if cytoband_path is not None:
+		gap_tab = pd.read_table(cytoband_path, sep="\t", header=None)
+		gap_tab.columns = ['chrom', 'start', 'end', 'name', 'type']
+		
+		name = np.array(gap_tab['name'])
+		# print (name)
+		pqarm = np.array([str(s)[0] for s in name])
+		gap_tab['pq_arm'] = pqarm
+		gap_tab['length'] = gap_tab['end'] - gap_tab['start']
+		summarize = gap_tab.groupby(['chrom', 'pq_arm']).sum().reset_index()
+		# print (summarize)
+		
+		if np.sum(summarize['pq_arm'] == 'p') > 0:
+			split_point = \
+			np.ceil(np.array(summarize[(summarize['chrom'] == chrom) & (summarize['pq_arm'] == 'p')]['length']) / res)[0]
+		else:
+			split_point = -1
+		
+		gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
+		start = np.floor((np.array(gap_list['start'])) / res).astype('int')
+		end = np.ceil((np.array(gap_list['end'])) / res).astype('int')
+		
+		for s, e in zip(start, end):
+			a[s:e, :] = 1
+			a[:, s:e] = 1
 	else:
 		split_point = -1
-	
-	gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
-	start = np.floor((np.array(gap_list['start'])) / res).astype('int')
-	end = np.ceil((np.array(gap_list['end'])) / res).astype('int')
-	
-	for s, e in zip(start, end):
-		a[s:e, :] = 1
-		a[:, s:e] = 1
 	a[gap, :] = 1
 	a[:, gap] = 1
 	
@@ -319,7 +321,10 @@ res = config['resolution']
 data_dir = config['data_dir']
 temp_dir = config['temp_dir']
 raw_dir = os.path.join(temp_dir, "raw")
-cytoband_path = config['cytoband_path']
+if 'cytoband_path' in config:
+	cytoband_path = config['cytoband_path']
+else:
+	cytoband_path = None
 neighbor_num = config['neighbor_num']
 embedding_name = config['embedding_name']
 
