@@ -68,7 +68,7 @@ def gen_tad(chrom):
 	bulk1 *= mask
 	#
 	# use_rows = np.where(np.sum(bulk1, axis=-1) > 0.1 * np.sum(bulk1) / len(bulk1))[0]
-	discard_rows = np.where(np.sum(bulk1, axis=-1) <= 0.1 * np.sum(bulk1) / len(bulk1))[0]
+	discard_rows = np.where(np.sum(bulk1, axis=-1) <= 0.01 * np.sum(bulk1) / len(bulk1))[0]
 	bulk1 = 0
 	
 	
