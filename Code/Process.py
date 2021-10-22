@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import h5py
 import pickle
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import normalize
 from scipy.sparse.csgraph import laplacian
@@ -103,60 +103,93 @@ def data2triplets(data, chrom_start_end, verbose):
 # Extra the data.txt table
 # Memory consumption re-optimize
 def extract_table():
-	print ("extracting from data.txt")
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
-	
-	if "structured" in config:
-		if config["structured"]:
-			chunksize = int(5e6)
-			unique, new_count = [], []
-			cell_tab = []
-			
-			p_list = []
-			pool = ProcessPoolExecutor(max_workers=cpu_num)
-			print ("First calculating how many lines are there")
-			line_count = sum(1 for i in open(os.path.join(data_dir, "data.txt"), 'rb'))
-			print("There are %d lines" % line_count)
-			bar = trange(line_count, desc=' - Processing ', leave=False, )
-			with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
-				chunk_count = 0
-				reader = pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
-				for chunk in reader:
-					if len(chunk['cell_id'].unique()) == 1:
-						# Only one cell, keep appending
-						cell_tab.append(chunk)
-					else:
-						# More than one cell, append all but the last part
-						last_cell = np.array(chunk.tail(1)['cell_id'])[0]
-						tails = chunk.iloc[np.array(chunk['cell_id']) != last_cell, :]
-						head = chunk.iloc[np.array(chunk['cell_id']) == last_cell, :]
-						cell_tab.append(tails)
-						cell_tab = pd.concat(cell_tab, axis=0).reset_index()
-						p_list.append(pool.submit(data2triplets, cell_tab.copy(deep=True), chrom_start_end, False))
-						cell_tab = [head]
-						bar.update(n=chunksize)
-						bar.refresh()
-						
-			if len(cell_tab) != 0:
-				cell_tab = pd.concat(cell_tab, axis=0).reset_index()
-				p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
+	if input_format == 'higashi_v1':
+		print ("extracting from data.txt")
+		if "structured" in config:
+			if config["structured"]:
+				chunksize = int(5e6)
+				unique, new_count = [], []
+				cell_tab = []
 				
-			for p in as_completed(p_list):
-				u_, n_ = p.result()
-				unique.append(u_)
-				new_count.append(n_)
-				bar.update(n=chunksize)
-				bar.refresh()
-				
-			unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+				p_list = []
+				pool = ProcessPoolExecutor(max_workers=cpu_num)
+				print ("First calculating how many lines are there")
+				line_count = sum(1 for i in open(os.path.join(data_dir, "data.txt"), 'rb'))
+				print("There are %d lines" % line_count)
+				bar = trange(line_count, desc=' - Processing ', leave=False, )
+				with open(os.path.join(data_dir, "data.txt"), 'r') as csv_file:
+					chunk_count = 0
+					reader = pd.read_csv(csv_file, chunksize=chunksize, sep="\t")
+					for chunk in reader:
+						if len(chunk['cell_id'].unique()) == 1:
+							# Only one cell, keep appending
+							cell_tab.append(chunk)
+						else:
+							# More than one cell, append all but the last part
+							last_cell = np.array(chunk.tail(1)['cell_id'])[0]
+							tails = chunk.iloc[np.array(chunk['cell_id']) != last_cell, :]
+							head = chunk.iloc[np.array(chunk['cell_id']) == last_cell, :]
+							cell_tab.append(tails)
+							cell_tab = pd.concat(cell_tab, axis=0).reset_index()
+							p_list.append(pool.submit(data2triplets, cell_tab.copy(deep=True), chrom_start_end, False))
+							cell_tab = [head]
+							bar.update(n=chunksize)
+							bar.refresh()
+							
+				if len(cell_tab) != 0:
+					cell_tab = pd.concat(cell_tab, axis=0).reset_index()
+					p_list.append(pool.submit(data2triplets, cell_tab, chrom_start_end, False))
+					
+				for p in as_completed(p_list):
+					u_, n_ = p.result()
+					unique.append(u_)
+					new_count.append(n_)
+					bar.update(n=chunksize)
+					bar.refresh()
+					
+				unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+			else:
+				data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
+				# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
+				unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
 		else:
 			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
 			# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 			unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
+	elif input_format == 'higashi_v2':
+		print ("extracting from filelist.txt")
+		with open(os.path.join(data_dir, "filelist.txt"), "r") as f:
+			lines = f.readlines()
+			filelist = [line.strip() for line in lines]
+		unique, new_count = [], []
+		bar = trange(len(filelist))
+		for cell_id, file in enumerate(filelist):
+			if "header_included" in config:
+				if config['header_included']:
+					tab = pd.read_table(file, sep="\t")
+				else:
+					tab = pd.read_table(file, sep="\t", header=None)
+					tab.columns = config['contact_header']
+			else:
+				tab = pd.read_table(file, sep="\t", header=None)
+				tab.columns = config['contact_header']
+			tab['cell_id'] = cell_id
+			if 'count' not in tab.columns:
+				tab['count'] = 1
+			u_, n_= data2triplets(tab, chrom_start_end, verbose=True)
+			unique.append(u_)
+			new_count.append(n_)
+			bar.update(1)
+		unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+		bar.close()
+		
+				
+		
 	else:
-		data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
-		# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
-		unique, new_count = data2triplets(data, chrom_start_end, verbose=True)
+		print ("invalid input format")
+		raise EOFError
+	
 	
 	intra_contacts = unique[:, 1] == unique[:, 2]
 	inter_contacts = unique[:, 1] != unique[:, 2]
@@ -362,7 +395,7 @@ def create_matrix():
 			data = data[~mask]
 			weight = weight[~mask]
 
-			if len(temp) > 5e5:
+			if len(temp) > 3e6:
 				save_mem = True
 			else:
 				save_mem = False
@@ -381,7 +414,7 @@ def create_matrix():
 			per_cell_read = np.sum(temp_weight) / cell_num
 
 			if save_mem:
-				split_num = int(math.floor(len(temp) / 2e6))
+				split_num = int(math.floor(len(temp) / 3e6))
 				print (chrom_list[c], "split_num", split_num)
 				cell_id = np.array_split(np.arange(cell_num), split_num)
 				for part in range(split_num):
@@ -487,11 +520,11 @@ def create_matrix():
 						row_indices, col_indices = m.nonzero()
 						m.data /= row_sums[row_indices]
 						m.data *= bulk_bin[row_indices]
-
 						cell_adj_all[i] = m.reshape((1, -1))
 				else:
 					for i in np.where(batch_id_info == b)[0]:
 						m = cell_adj_all[i]
+						row_indices, col_indices = m.nonzero()
 						cell_adj_all[i] = m.reshape((1, -1))
 
 			cell_adj_all = vstack(cell_adj_all).tocsr()
@@ -527,7 +560,7 @@ def create_matrix():
 			
 		bar.close()
 		pool.shutdown(wait=True)
-		
+
 		total_sparsity = total_reads / total_possible
 		print("sparsity", total_sparsity.shape, total_sparsity, np.median(total_sparsity))
 
@@ -715,6 +748,12 @@ def generate_feats_one(temp, total_embed_size, total_chrom_size, c):
 		
 		temp = normalize(temp, norm='l1', axis=1) * length
 		temp.data = np.log1p(temp.data)
+		
+		mean_, std_ = np.mean(temp.data), np.std(temp.data)
+		print("mean", "std", "max", "0.9q", mean_, std_, np.max(temp.data), np.quantile(temp.data, 0.9))
+		print("# of outliers:", np.sum(temp.data > (mean_ + 5 * std_)), "# of nonzero terms", len(temp.data))
+		np.clip(temp.data, a_min=None, a_max=mean_ + 5 * std_, out=temp.data)
+		
 		# print (temp.shape, total_embed_size, total_chrom_size, length, size)
 		temp = temp[:, mask]
 		print (c, size)
@@ -919,6 +958,11 @@ if not os.path.exists(rw_dir):
 	os.mkdir(rw_dir)
 
 genome_reference_path = config['genome_reference_path']
+
+if 'input_format' in config:
+	input_format = config['input_format']
+else:
+	input_format = 'higashi_v1'
 
 if 'cpu_num' in config:
 	cpu_num = config['cpu_num']
