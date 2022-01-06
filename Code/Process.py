@@ -433,11 +433,36 @@ def create_matrix():
 				c2total_part_num[c] = 1
 			temp_mask = temp
 			temp_weight_mask = temp_weight
-			bin_adj = csr_matrix((temp_weight_mask, (temp_mask[:, 2]- chrom_start_end[c, 0], temp_mask[:, 3]- chrom_start_end[c, 0])), shape=(size, size))
-			bin_adj = np.array(bin_adj.todense())
-			bin_adj = bin_adj + bin_adj.T - np.diag(np.diagonal(bin_adj)) + np.eye(len(bin_adj))
-			bin_adj = sqrt_norm(bin_adj)
-
+			
+			def pseudo_bulk():
+				bin_adj = csr_matrix((temp_weight_mask, (
+				temp_mask[:, 2] - chrom_start_end[c, 0], temp_mask[:, 3] - chrom_start_end[c, 0])), shape=(size, size))
+				bin_adj = np.array(bin_adj.todense())
+				bin_adj = bin_adj + bin_adj.T - np.diag(np.diagonal(bin_adj)) + np.eye(len(bin_adj))
+				bin_adj = sqrt_norm(bin_adj)
+				return bin_adj
+			
+			if "bulk_path" not in config:
+				bin_adj = pseudo_bulk()
+			else:
+				print ("using bulk hic")
+				bk_path = config['bulk_path']
+				if 'mcool' in bk_path:
+					bk_path = bk_path+"::resolutions/%d" % res
+				
+				if 'cool' in bk_path:
+					f = cooler.Cooler(bk_path)
+					bin_adj = f.matrix(balance=False).fetch(chrom_list[c])
+					bin_adj = np.array(bin_adj)
+					bin_adj[np.isnan(bin_adj)] = 0.0
+				elif 'npy' in bk_path:
+					bin_adj = np.load(bk_path)
+					
+				if len(bin_adj) != size:
+					print("incorrect shape", "receives", bin_adj.shape, "should be",size)
+					print ("fallback to pseudobulk")
+					bin_adj = pseudo_bulk()
+				
 			if pca_flag:
 				size1 = int(0.2 * len(bin_adj))
 				U, s, Vt = pca(bin_adj, k=size1, raw=True)  # Automatically centers.
@@ -746,20 +771,21 @@ def generate_feats_one(temp, total_embed_size, total_chrom_size, c):
 		length = int(np.sqrt(temp.shape[-1]) / 1000000 * res_cell)
 		size = int(total_embed_size / total_chrom_size * length) + 1
 		
-		temp = normalize(temp, norm='l1', axis=1) * length
-		temp.data = np.log1p(temp.data)
+		
 		
 		mean_, std_ = np.mean(temp.data), np.std(temp.data)
-		print("mean", "std", "max", "0.9q", mean_, std_, np.max(temp.data), np.quantile(temp.data, 0.9))
-		print("# of outliers:", np.sum(temp.data > (mean_ + 5 * std_)), "# of nonzero terms", len(temp.data))
-		np.clip(temp.data, a_min=None, a_max=mean_ + 5 * std_, out=temp.data)
+		# print("mean", "std", "max", "0.9q", mean_, std_, np.max(temp.data), np.quantile(temp.data, 0.9))
+		# print("# of outliers:", np.sum(temp.data > (mean_ + 15 * std_)), "# of nonzero terms", len(temp.data))
+		np.clip(temp.data, a_min=None, a_max=mean_ + 15 * std_, out=temp.data)
+		temp = normalize(temp, norm='l1', axis=1) * length
+		# temp.data = np.log1p(temp.data)
 		
-		# print (temp.shape, total_embed_size, total_chrom_size, length, size)
 		temp = temp[:, mask]
-		print (c, size)
-		np.random.seed(0)
-		U, s, Vt = pca(temp, k=size)  # Automatically centers.
-		temp1 = np.array(U[:, :size] * s[:size])
+		# print (c, size)
+		# np.random.seed(0)
+		# U, s, Vt = pca(temp, k=size)  # Automatically centers.
+		# temp1 = np.array(U[:, :size] * s[:size])
+		temp1 = TruncatedSVD(n_components=size).fit_transform(temp)
 	else:
 		temp1 = np.eye(temp.shape[0])
 
