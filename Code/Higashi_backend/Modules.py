@@ -3,6 +3,7 @@ import random
 import math
 
 import numpy as np
+import torch.cuda
 
 from Higashi_backend.utils import *
 from Higashi_backend.Functions import *
@@ -548,11 +549,8 @@ class MultipleEmbedding(nn.Module):
 										   add_activation=True))
 		
 		for i in range(1, len(self.embeddings)):
-			if self.input_size[i] == target_weights[i].shape[-1]:
-				self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[]))
-			else:
-				self.wstack.append(AutoEncoder([self.input_size[i], self.dim],[self.dim, target_weights[i].shape[-1]],add_activation=True))
-		
+			self.wstack.append(TiedAutoEncoder([self.input_size[i], self.dim],add_activation=True, tied_list=[]))
+			
 		
 		self.wstack = nn.ModuleList(self.wstack)
 		self.on_hook_embedding = nn.ModuleList([nn.Sequential(w,
@@ -562,7 +560,8 @@ class MultipleEmbedding(nn.Module):
 		self.off_hook_embedding = [i for i in range(len(self.embeddings))]
 		self.features = self.forward
 		
-	def forward(self, x, *args):
+	# route_nn means for this batch of nodes use the xth NN to get embeddings
+	def forward(self, x, *args, route_nn=None):
 		if len(x.shape) > 1:
 			sz_b, len_seq = x.shape
 			x = x.view(-1)
@@ -570,20 +569,27 @@ class MultipleEmbedding(nn.Module):
 		else:
 			reshape_flag = False
 		
-		final = torch.zeros((len(x), self.dim), device=device).float()
-		# ind is a bool type array
-		ind = self.searchsort_table[x]
-		node_type = torch.nonzero(torch.any(ind, dim=0)).view(-1)
-
-		for i in node_type:
-			mask = ind[:, i]
+		if route_nn is None:
+			final = torch.zeros((len(x), self.dim), device=device).float()
+			# ind is a bool type array
+			ind = self.searchsort_table[x]
+			node_type = torch.nonzero(torch.any(ind, dim=0)).view(-1)
+	
+			for i in node_type:
+				mask = ind[:, i]
+				if int(i) in self.on_hook_set:
+						final[mask] = self.on_hook_embedding[i](x[mask] - self.num_list[i] - 1)
+	
+				else:
+					final[mask] = self.off_hook_embedding[i](x[mask] - self.num_list[i] - 1)
+		else:
+			i = route_nn
 			if int(i) in self.on_hook_set:
-
-					final[mask] = self.on_hook_embedding[i](x[mask] - self.num_list[i] - 1)
-
+				final = self.on_hook_embedding[i](x - self.num_list[i] - 1)
+			
 			else:
-				final[mask] = self.off_hook_embedding[i](x[mask] - self.num_list[i] - 1)
-
+				final = self.off_hook_embedding[i](x - self.num_list[i] - 1)
+		
 		if reshape_flag:
 			final = final.view(sz_b, len_seq, -1)
 		
@@ -608,7 +614,10 @@ class MultipleEmbedding(nn.Module):
 			with torch.no_grad():
 				embed = self.on_hook_embedding[index](ids).detach()
 			self.embeddings[index] = self.embeddings[index].cpu()
-			self.targets[index] = self.targets[index].cpu()
+			try:
+				self.targets[index] = self.targets[index].cpu()
+			except:
+				pass
 			self.off_hook_embedding[index] = SparseEmbedding(embed, False)
 			try:
 				self.on_hook_set.remove(index)
@@ -694,21 +703,21 @@ class Hyper_SAGNN(nn.Module):
 		self.chrom_num = chrom_num
 		self.d_model = d_model
 	
-	def get_embedding(self, x, x_chrom, slf_attn_mask=None, non_pad_mask=None):
+	def get_embedding(self, x, x_chrom, slf_attn_mask=None, non_pad_mask=None, chroms_in_batch=None):
 		# if slf_attn_mask is None:
 		# 	slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
 		# 	non_pad_mask = get_non_pad_mask(x)
 		
 
-		dynamic, static, attn = self.encode1(x, x, x_chrom, slf_attn_mask, non_pad_mask)
+		dynamic, static = self.encode1(x, x, x_chrom, slf_attn_mask, non_pad_mask, chroms_in_batch=chroms_in_batch)
 		
 		if torch.sum(torch.isnan(dynamic)) > 0:
 			print ("nan error", x, dynamic, static)
 			raise EOFError
 			
-		return dynamic, static, attn
+		return dynamic, static
 	
-	def forward(self, x, x_chrom, mask=None):
+	def forward(self, x, x_chrom, mask=None, chroms_in_batch=None):
 		x = x.long()
 		sz_b, len_seq = x.shape
 		if self.attribute_dict is not None:
@@ -733,7 +742,7 @@ class Hyper_SAGNN(nn.Module):
 			# slf_attn_mask = get_attn_key_pad_mask(seq_k=x, seq_q=x)
 			# non_pad_mask = get_non_pad_mask(x)
 			
-			dynamic, static, attn = self.get_embedding(x, x_chrom)
+			dynamic, static = self.get_embedding(x, x_chrom, chroms_in_batch=chroms_in_batch)
 			dynamic = self.layer_norm1(dynamic)
 			static = self.layer_norm2(static)
 			
@@ -950,7 +959,7 @@ class ScaledDotProductAttention(nn.Module):
 			attn = attn.masked_fill(mask, -float('inf'))
 		
 		attn = self.masked_softmax(
-			attn, diag_mask, dim=-1, memory_efficient=True)
+			attn, diag_mask, dim=-1, memory_efficient=False)
 		
 		output = torch.bmm(attn, v)
 		
@@ -1118,27 +1127,35 @@ class EncoderLayer(nn.Module):
 		self.static_nn = static_nn
 		self.dropout = nn.Dropout(0.2)
 		
-	def forward(self, dynamic, static, chrom_info, slf_attn_mask, non_pad_mask):
+	def forward(self, dynamic, static, chrom_info, slf_attn_mask, non_pad_mask, chroms_in_batch):
 		
 		if type(chrom_info) is tuple:
 			chrom_info, to_neighs = chrom_info
 		else:
 			to_neighs = chrom_info
-
-		if isinstance(self.dynamic_nn, GraphSageEncoder_with_weights) :
-			dynamic, static = self.dynamic_nn(dynamic, to_neighs)
-		else:
-			static = self.static_nn(static, to_neighs)
-			dynamic = self.dynamic_nn(dynamic, to_neighs)
 			
-		dynamic, static1, attn = self.mul_head_attn(
+		final_chroms_in_batch = None
+		if chroms_in_batch is not None:
+			if len(chroms_in_batch) == 1:
+				# only one chromosome, use route_nn
+				final_chroms_in_batch = int(chroms_in_batch[0])
+		
+		if isinstance(self.dynamic_nn, GraphSageEncoder_with_weights) :
+			dynamic, static = self.dynamic_nn(dynamic, to_neighs, route_nn=final_chroms_in_batch)
+		else:
+			static_cell = self.static_nn(static[:, 0], to_neighs, route_nn=0)
+			static_bin = self.static_nn(static[:, 1:].contiguous(), to_neighs, route_nn=final_chroms_in_batch)
+			static = torch.cat([static_cell[:, None, :], static_bin], dim=1)
+			dynamic = static
+			
+		dynamic, static, attn = self.mul_head_attn(
 			dynamic, dynamic, static)
 		dynamic = self.pff_n1(dynamic) #* non_pad_mask
 		# static = self.pff_n2(static * non_pad_mask) * non_pad_mask
-		return dynamic, static1, attn
+		return dynamic, static
 
 # Sampling positive triplets.
-# THe number of triplets from each chromosome is balanced across different chromosome
+# The number of triplets from each chromosome is balanced across different chromosome
 class DataGenerator():
 	def __init__(self, edges, edge_chrom, edge_weight, batch_size, flag=False, num_list=None, k=1):
 		self.batch_size = batch_size
@@ -1147,21 +1164,15 @@ class DataGenerator():
 		self.batch_size = int(self.batch_size)
 		self.num_list = list(num_list)
 		
-		self.edges = [[] for i in range(len(self.num_list) - 1)]
-		self.edge_weight = [[] for i in range(len(self.num_list) - 1)]
-		self.edge_chrom = [[] for i in range(len(self.num_list) - 1)]
+		self.edges = edges
+		self.edge_weight = edge_weight
+		self.edge_chrom = edge_chrom
 		self.chrom_list = np.arange(len(self.num_list) - 1)
 		self.size_list = []
 		
-		
 		print ("initializing data generator")
 		for i in trange(len(self.num_list) - 1):
-			mask = (edges[:, 1] >= self.num_list[i]+1) &  (edges[:, 1] < self.num_list[i+1]+1)
-			self.size_list.append(np.sum(mask))
-			self.edges[i] = edges[mask]
-			self.edge_weight[i] = edge_weight[mask]
-			self.edge_chrom[i] = edge_chrom[mask]
-			
+			self.size_list.append(len(self.edges[i]))
 			if len(self.edges[i]) == 0:
 				print ("The %d th chrom in your chrom_list has no sample in this generator" % i)
 				continue
@@ -1170,14 +1181,18 @@ class DataGenerator():
 				self.edges[i] = np.concatenate([self.edges[i], self.edges[i]])
 				self.edge_weight[i] = np.concatenate([self.edge_weight[i], self.edge_weight[i]])
 				self.edge_chrom[i] = np.concatenate([self.edge_chrom[i], self.edge_chrom[i]])
-			
-			index = np.random.permutation(len(self.edges[i]))
-			self.edges[i] = (self.edges[i])[index]
-			self.edge_weight[i] = (self.edge_weight[i])[index]
-			self.edge_chrom[i] = (self.edge_chrom[i])[index]
 		
 		self.pointer = np.zeros(int(np.max(self.chrom_list) + 1)).astype('int')
 		self.size_list /= np.sum(self.size_list)
+		
+	def filter_edges(self, min_bin=0, max_bin=-1):
+		for i in trange(len(self.edges)):
+			mask = ((self.edges[i][:, 2] - self.edges[i][:, 1]) > min_bin) & (
+						(self.edges[i][:, 2] - self.edges[i][:, 1]) < max_bin)
+			self.edges[i] = self.edges[i][mask]
+			self.edge_weight[i] = self.edge_weight[i][mask]
+			self.edge_chrom[i] = self.edge_chrom[i][mask]
+			
 		
 		
 	def next_iter(self):
@@ -1210,7 +1225,7 @@ class DataGenerator():
 		e = np.concatenate(e_list, axis=0)
 		c = np.concatenate(c_list, axis=0)
 		w = np.concatenate(w_list, axis=0)
-		return e, c, w
+		return e, c, w, chroms
 
 
 class MeanAggregator(nn.Module):
@@ -1313,31 +1328,38 @@ class MeanAggregator_with_weights(nn.Module):
 		return x
 	
 	# nodes_real represents the true bin_id, nodes might represent the pseudo_id generated by cell_id * (bin_num+1) + bin_id
-	def forward(self, nodes_real, to_neighs, num_sample=10):
+	def forward(self, nodes_real, to_neighs, num_sample=10, route_nn=None):
 		"""
 		nodes --- list of nodes in a batch
 		to_neighs --- list of sets, each set is the set of neighbors for node in batch
 		num_sample --- number of neighbors to sample. No sampling if None.
 		"""
 		
-		row_indices, column_indices,  v, unique_nodes_list = to_neighs
+		
+		# if hasattr(torch, "sparse_csr_tensor"):
+		# 	crow_indices, column_indices, v, unique_nodes_list = to_neighs
+		# 	unique_nodes_list = unique_nodes_list.to(device, non_blocking=True)
+		# 	mask = torch.sparse_csr_tensor(torch.as_tensor(crow_indices).long().to(device),
+		# 	                               torch.as_tensor(column_indices).long().to(device),
+		# 	                               torch.from_numpy(v).float().to(device),
+		# 	                               size=torch.Size([len(nodes_real),
+		# 	                                           len(unique_nodes_list)]), device=device, requires_grad=False)
+		# else:
+		indices,  v, unique_nodes_list = to_neighs
 		unique_nodes_list = unique_nodes_list.to(device, non_blocking=True)
-		mask = torch.sparse.FloatTensor(torch.LongTensor([row_indices, column_indices]),
-										torch.tensor(v, dtype=torch.float),
-										torch.Size([len(nodes_real), len(unique_nodes_list)])).to(device, non_blocking=True)
-		embed_matrix = self.features(unique_nodes_list)
+		mask = torch.sparse_coo_tensor(indices.to(device), v.to(device),
+		                               torch.Size([len(nodes_real),
+		                                           len(unique_nodes_list)]), device=device)
+		embed_matrix = self.features(unique_nodes_list, route_nn=route_nn)
 		to_feats = mask.mm(embed_matrix)
+
 		return to_feats
 
-	def forward_GCN(self, nodes, adj, moving_range=0):
-		embed_matrix = self.features(nodes)
-		adj = moving_avg(adj, moving_range)
-		adj.data = np.log1p(adj.data)
-		adj = normalize(adj, norm='l1', axis=1)
-		Acoo = adj.tocoo()
-		
-		mask = torch.sparse.FloatTensor(torch.LongTensor([Acoo.row.tolist(), Acoo.col.tolist()]),
-									  torch.FloatTensor(Acoo.data), torch.Size([adj.shape[0], adj.shape[1]])).to(device, non_blocking=True)
+	def forward_GCN(self, nodes, adj, moving_range=0, route_nn=None):
+		embed_matrix = self.features(nodes, route_nn=route_nn)
+		indices, data, shape = adj
+		mask = torch.sparse_coo_tensor(indices.to(device), data.to(device),
+		                               torch.Size([shape[0], shape[1]]), device=device)
 		to_feats = mask.mm(embed_matrix)
 		
 		return to_feats
@@ -1347,16 +1369,10 @@ def moving_avg(adj, moving_range):
 	adj_origin = adj.copy()
 	adj = adj.copy()
 	adj = adj * norm.pdf(0)
-	for i in range(moving_range * 3):
-		before_list = []
-		after_list = []
-		for j in range(i + 1):
-			before_list.append(adj_origin[0, :])
-		before_list.append(adj_origin[:-(i+1), :])
+	for i in range(moving_range * 2):
+		before_list = [adj_origin[0, :]] * (i+1) + [adj_origin[:-(i+1), :]]
 		adj_before = vstack(before_list)
-		after_list.append(adj_origin[i+1:, :])
-		for j in range(i + 1):
-			after_list.append(adj_origin[-1, :])
+		after_list = [adj_origin[i+1:, :]] + [adj_origin[-1, :]] * (i+1)
 		adj_after = vstack(after_list)
 		adj = adj + (adj_after + adj_before) * norm.pdf((i+1) / moving_range)
 	return adj
@@ -1398,11 +1414,6 @@ class GraphSageEncoder_with_weights(nn.Module):
 		self.nn = nn.Linear(input_size * self.feat_dim, embed_dim)
 		self.num_list = torch.as_tensor(num_list)
 		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
-		
-		if self.transfer_range > 0:
-			self.bin_feats_linear = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
-		if not self.gcn:
-			self.bin_feats_self = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
 		self.fix = False
 		self.forward = self.forward_on_hook
 		
@@ -1412,20 +1423,15 @@ class GraphSageEncoder_with_weights(nn.Module):
 		self.cell_feats = self.features(ids)
 	
 	
-	def fix_cell2(self, cell, bin_ids=None, sparse_matrix=None, local_transfer_range=0):
+	def fix_cell2(self, cell, bin_ids=None, sparse_matrix=None, local_transfer_range=0, route_nn_list=None):
 		self.fix = True
+		self.eval()
+		# instead of
 		with torch.no_grad():
-			
 			for chrom, bin_id in enumerate(bin_ids):
-				magic_number = int(self.num_list[-1] + 1)
 				nodes_flatten = torch.from_numpy(bin_id).long().to(device, non_blocking=True)
-				
-				
 				neigh_feats = self.aggregator.forward_GCN(nodes_flatten,
-													  sparse_matrix[chrom], local_transfer_range)
-				
-				self.bin_feats[nodes_flatten] = neigh_feats.detach().clone()
-				
+													  sparse_matrix[chrom], local_transfer_range, route_nn=route_nn_list[chrom])
 				tr = self.transfer_range
 				if tr > 0:
 					start = np.maximum(bin_id - tr, self.start_end_dict[bin_id, 0] + 1)
@@ -1436,13 +1442,34 @@ class GraphSageEncoder_with_weights(nn.Module):
 					neigh_feats_linear = self.linear_aggregator.forward(nodes_flatten,
 																		to_neighs,
 																		2 * tr + 1)
-					self.bin_feats_linear[nodes_flatten, :] = neigh_feats_linear.detach().clone()
-				
+				list1 = [neigh_feats, neigh_feats_linear] if tr > 0 else [neigh_feats]
 				if not self.gcn:
-					self.bin_feats_self[nodes_flatten, :] = self.features(nodes_flatten)
+					bin_feats_self = self.features(nodes_flatten)
+					list1.append(bin_feats_self)
+				
 					
+				if len(list1) > 0:
+					combined = torch.cat(list1, dim=-1)
+				else:
+					combined = list1[0]
+				combined = activation_func(self.nn(combined))
+				self.bin_feats[nodes_flatten] = combined.detach().clone()
 	
-	def forward_on_hook(self, nodes, to_neighs, *args):
+	
+	def forward_off_hook(self, nodes, to_neighs, *args, route_nn=None):
+		if len(nodes.shape) == 1:
+			nodes_flatten = nodes
+		else:
+			sz_b, len_seq = nodes.shape
+			nodes_flatten = nodes[:, 1:].contiguous().view(-1)
+			
+		cell_feats = self.cell_feats[nodes[:, 0] - 1, :]
+		neigh_feats = self.bin_feats[nodes_flatten, :].view(sz_b, len_seq - 1, -1)
+		return torch.cat([cell_feats[:, None, :], neigh_feats], dim=1).view(sz_b, len_seq, -1), \
+		       torch.cat([cell_feats[:, None, :], self.features(nodes_flatten).view(sz_b, len_seq - 1, -1)
+					], dim=1).view(sz_b, len_seq, -1)
+	
+	def forward_on_hook(self, nodes, to_neighs, *args, route_nn=None):
 		"""
 		Generates embeddings for a batch of nodes.
 		nodes     -- list of nodes
@@ -1468,9 +1495,9 @@ class GraphSageEncoder_with_weights(nn.Module):
 			if len(nodes.shape) == 1:
 
 				
-				neigh_feats = self.aggregator.forward(nodes_flatten, to_neighs, self.num_sample)
+				neigh_feats = self.aggregator.forward(nodes_flatten, to_neighs, self.num_sample, route_nn=route_nn)
 			else:
-				cell_feats = self.features(nodes[:, 0].to(device, non_blocking=True))
+				cell_feats = self.features(nodes[:, 0].to(device, non_blocking=True), route_nn=0)
 				neigh_feats = self.aggregator.forward(nodes_flatten, to_neighs,
 													  self.num_sample).view(sz_b, len_seq - 1, -1)
 			if tr > 0:
@@ -1493,10 +1520,10 @@ class GraphSageEncoder_with_weights(nn.Module):
 				self_feats = self.bin_feats_self[nodes_flatten].view(sz_b, len_seq - 1, -1)
 			else:
 				if len(nodes.shape) == 1:
-					self_feats = self.features(nodes_flatten)
+					self_feats = self.features(nodes_flatten, route_nn=route_nn)
 				else:
 					sz_b, len_seq = nodes.shape
-					self_feats = self.features(nodes_flatten).view(sz_b, len_seq - 1, -1)
+					self_feats = self.features(nodes_flatten, route_nn=route_nn).view(sz_b, len_seq - 1, -1)
 					
 			list1.append(self_feats)
 		
