@@ -518,7 +518,7 @@ def oe(matrix, expected = None):
 		if expected is not None:
 			expect = expected[k]
 		else:
-			expect = np.mean(diag)
+			expect = np.sum(diag) / (np.sum(diag != 0.0) + 1e-15)
 		if expect == 0:
 			new_matrix[rows, cols] = 0.0
 		else:
@@ -579,6 +579,7 @@ def sqrt_norm(matrix):
 		matrix = matrix / coverage.reshape((-1, 1))
 		matrix = matrix / coverage.reshape((1, -1))
 	matrix[np.isnan(matrix)] = 0.0
+	matrix[np.isinf(matrix)] = 0.0
 	return matrix
 
 def pass_norm(matrix):
