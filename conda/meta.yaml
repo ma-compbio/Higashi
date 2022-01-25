@@ -1,0 +1,9 @@
+package:
+  name: "higashi"
+  version: "0.2.0"
+about:
+  summary: "Higashi: Multiscale and integrative scHi-C analysis"
+source:
+  path: ..
+build:
+  script: python setup.py install
