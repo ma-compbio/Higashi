@@ -624,7 +624,7 @@ class MultipleEmbedding(nn.Module):
 			except:
 				pass
 	
-	def on_hook(self, on_hook_list):
+	def on_hook(self, on_hook_list=[]):
 		if len(on_hook_list) == 0:
 			on_hook_list = list(range(len(self.wstack)))
 		for index in on_hook_list:
