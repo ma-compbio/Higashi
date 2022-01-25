@@ -1,26 +1,26 @@
 package:
   name: "higashi"
-  version: "0.2.0"
+  version: 0.2.0
 about:
   summary: "Higashi: Multiscale and integrative scHi-C analysis"
-source:
-  path: ..
 
-requirements:
-  run:
-  - python>=3.7.0
-  - h5py
-  - numpy
-  - pandas
-  - pytorch>=1.7.0
-  - fbpca
-  - scikit-learn>=0.23.2
-  - tqdm
-  - cooler>=0.8
-  - seaborn
-  - matplotlib
-  - umap-learn
-  - bokeh>=2.1.1
-  - Pillow
+source:
+  git_url: https://github.com/ma-compbio/Higashi.git
 build:
   script: python setup.py install
+requirements:
+  run:
+    - python>=3.7.0
+    - h5py
+    - numpy
+    - pandas
+    - pytorch>=1.7.0
+    - fbpca
+    - scikit-learn>=0.23.2
+    - tqdm
+    - cooler>=0.8
+    - seaborn
+    - matplotlib
+    - umap-learn
+    - bokeh>=2.1.1
+    - Pillow

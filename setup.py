@@ -6,7 +6,8 @@ setup(
     description='Higashi: Multiscale and integrative scHi-C analysis',
     url='https://github.com/ma-compbio/Higashi',
     include_package_data=True,
-    packages=find_packages(exclude=['Temp', 'config_dir', 'figs']),
+    packages=['higashi'],
+    package_data={'higashi':['./Code']},
     author='Ruochi Zhang',
     author_email='ruochiz@andrew.cmu.edu',
     license='MIT'
