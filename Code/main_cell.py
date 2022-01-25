@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import time
 import warnings
 import torch.optim
 from Higashi_backend.Modules import *
@@ -14,6 +15,7 @@ import pickle
 import subprocess
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+torch.backends.cudnn.benchmark = True
 torch.set_default_dtype(torch.float32)
 
 def parse_args():
@@ -29,23 +31,25 @@ def get_free_gpu(num=1):
 	memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
 	if len(memory_available) > 0:
 		max_mem = np.max(memory_available)
-		ids = np.where(memory_available == max_mem)[0]
 		if num == 1:
+			ids = np.where(memory_available == max_mem)[0]
 			chosen_id = int(np.random.choice(ids, 1)[0])
 			print("setting to gpu:%d" % chosen_id)
 			torch.cuda.set_device(chosen_id)
 			return "cuda:%d" % chosen_id
 		else:
-			return np.random.choice(ids, num)
+			ids = np.argsort(memory_available)[::-1][:num]
+			return ids
 		
 	else:
 		return
 
 
-def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_chrom, batch_to_neighs, y):
+def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_chrom, batch_to_neighs, y, chroms_in_batch):
 	x = batch_data
 	w = batch_weight
-	pred, pred_var, pred_proba = model(x, (batch_chrom, batch_to_neighs))
+	# plus one, because chr1 - id 0 - NN1
+	pred, pred_var, pred_proba = model(x, (batch_chrom, batch_to_neighs), chroms_in_batch=chroms_in_batch+1)
 	
 	if use_recon:
 		adj = node_embedding_init.embeddings[0](cell_ids).float()
@@ -96,7 +100,7 @@ def forward_batch_hyperedge(model, loss_func, batch_data, batch_weight, batch_ch
 	return pred, main_loss, mse_loss
 
 
-def train_epoch(model, loss_func, training_data_generator, optimizer_list):
+def train_epoch(model, loss_func, training_data_generator, optimizer_list, train_pool, train_p_list):
 	loss_func = loss_func
 	
 	model.train()
@@ -107,18 +111,18 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 	
 	batch_num = int(update_num_per_training_epoch / collect_num)
 	
-	pool = ProcessPoolExecutor(max_workers=max(int(cpu_num * 0.9) + 1, 1))
-	p_list = []
 	y_list, w_list, pred_list = [], [], []
 	
 	bar = trange(batch_num * collect_num, desc=' - (Training) ', leave=False, )
 	
-	for i in range(batch_num):
-		edges_part, edges_chrom, edge_weight_part = training_data_generator.next_iter()
-		p_list.append(pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True))
-		
-	for p in as_completed(p_list):
-		batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big = p.result()
+	
+	while len(train_p_list) < batch_num:
+		edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
+		train_p_list.append(train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
+		                          chroms_in_batch))
+	finish_count = 0
+	for p in as_completed(train_p_list):
+		batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.result()
 		batch_edge_big = np2tensor_hyper(batch_edge_big, dtype=torch.long)
 		batch_y_big, batch_edge_weight_big = torch.from_numpy(batch_y_big), torch.from_numpy(batch_edge_weight_big)
 		
@@ -134,7 +138,8 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 													batch_to_neighs_big[j]
 
 			pred, loss_bce, loss_mse = forward_batch_hyperedge(model, loss_func, batch_edge,
-																			batch_edge_weight, batch_chrom, batch_to_neighs, y=batch_y)
+																batch_edge_weight, batch_chrom,
+                                                               batch_to_neighs, y=batch_y, chroms_in_batch=chroms_in_batch)
 
 
 
@@ -143,11 +148,10 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 			pred_list.append(pred.detach().cpu())
 
 			final_batch_num += 1
-
-
+			
 			if use_recon:
 				for opt in optimizer_list:
-					opt.zero_grad()
+					opt.zero_grad(set_to_none=True)
 				loss_bce.backward(retain_graph=True)
 				try:
 					main_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
@@ -155,13 +159,12 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 					main_norm = 0.0
 
 				for opt in optimizer_list:
-					opt.zero_grad()
+					opt.zero_grad(set_to_none=True)
 				loss_mse.backward(retain_graph=True)
 
 				recon_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
-
 				ratio = beta * main_norm / recon_norm
-				ratio1 = max(ratio, 100 * np.median(total_sparsity_cell) - 8)
+				ratio1 = max(ratio, 100 * median_total_sparsity_cell - 3)
 
 				if contractive_flag:
 					contractive_loss = 0.0
@@ -179,7 +182,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 
 			train_loss = alpha * loss_bce + ratio1 * loss_mse + contractive_loss_weight * contractive_loss
 			for opt in optimizer_list:
-				opt.zero_grad()
+				opt.zero_grad(set_to_none=True)
 			# backward
 			train_loss.backward()
 
@@ -189,23 +192,32 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list):
 
 			bar.update(n=1)
 			bar.set_description(" - (Training) BCE:  %.3f MSE: %.3f Loss: %.3f norm_ratio: %.2f"  %
-								(loss_bce.item(), loss_mse.item(),  train_loss.item(), ratio),
+								(loss_bce.item(), loss_mse.item(),  train_loss.item(), ratio1),
 								refresh=False)
 			
 			bce_total_loss += loss_bce.item()
 			mse_total_loss += loss_mse.item()
 			
-		p_list.remove(p)
+		train_p_list.remove(p)
+		
+		while len(train_p_list) < batch_num:
+			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
+			train_p_list.append(
+				train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
+				                  chroms_in_batch))
+			
+		finish_count += 1
+		if finish_count == batch_num:
+			break
 	
 	y = torch.cat(y_list)
 	w = torch.cat(w_list)
 	pred = torch.cat(pred_list)
 	
 	auc1, auc2, str1, str2 = roc_auc_cuda(w, pred)
-	pool.shutdown(wait=True)
 	bar.close()
 	return bce_total_loss / final_batch_num, mse_total_loss / final_batch_num, accuracy(
-		y.view(-1), pred.view(-1)), auc1, auc2, str1, str2
+		y.view(-1), pred.view(-1)), auc1, auc2, str1, str2, train_pool, train_p_list
 
 
 def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
@@ -221,17 +233,17 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
 			p_list = []
 
 			for i in range(update_num_per_eval_epoch):
-				edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
+				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
 				p_list.append(
-					pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False))
+					pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
 
 		for p in as_completed(p_list):
-			batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs = p.result()
+			batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs, chroms_in_batch = p.result()
 			batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
 			batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
 			batch_x, batch_y, batch_w = batch_x.to(device, non_blocking=True), batch_y.to(device, non_blocking=True), batch_w.to(device, non_blocking=True)
 			
-			pred_batch, eval_loss, eval_mse = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, batch_chrom, batch_to_neighs[0], y=batch_y)
+			pred_batch, eval_loss, eval_mse = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, batch_chrom, batch_to_neighs[0], y=batch_y, chroms_in_batch=chroms_in_batch)
 			
 			
 			bce_total_loss += eval_loss.item()
@@ -240,10 +252,7 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
 			w_list.append(batch_w.detach().cpu())
 			pred_list.append(pred_batch.detach().cpu())
 			
-			# auc1, auc2, str1, str2 = roc_auc_cuda(batch_w, pred_batch)
-			# auc1_list.append(auc1)
-			# auc2_list.append(auc2)
-			# acc_list.append(accuracy(pred_batch, batch_y))
+			
 			bar.update(n=1)
 			bar.set_description(" - (Validation) BCE:  %.3f MSE: %.3f " %
 								(eval_loss.item(), eval_mse.item()),
@@ -262,12 +271,36 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
 
 def check_nonzero(x, c):
 	# minus 1 because add padding index
+	mtx = sparse_chrom_list_dict[c][x[0]-1]
+	M, N = mtx.shape
+	if mem_efficient_flag:
+		row_start = max(0, x[1]-1-num_list[c]-1)
+		row_end = min(x[1]-1-num_list[c]+2, N-1)
+		col_start = max(0, x[2]-1-num_list[c]-1)
+		col_end = min(x[2]-1-num_list[c]+2, N-1)
+	else:
+		row_start = x[1]-1-num_list[c]
+		row_end = min(row_start + 1, N-1)
+		col_start = x[2]-1-num_list[c]
+		col_end = min(col_start + 1, N-1)
+	try:
+		indptr, nbrs, nbr_value = get_csr_submatrix(
+			M, N, mtx.indptr, mtx.indices, mtx.data, row_start, row_end, col_start, col_end)
+	except:
+		print (M, N, row_start, row_end, col_start, col_end, mem_efficient_flag)
+	a =  len(nbr_value) > 0
+	
+	return a
+
+def check_nonzero_old(x, c):
+	# minus 1 because add padding index
 	if mem_efficient_flag:
 		dim = sparse_chrom_list_dict[c][x[0]-1].shape[-1]
-		return sparse_chrom_list_dict[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1),
+		a = sparse_chrom_list_dict[c][x[0]-1][max(0, x[1]-1-num_list[c]-1):min(x[1]-1-num_list[c]+2, dim-1),
 		       max(0, x[2]-1-num_list[c]-1):min(x[2]-1-num_list[c]+2, dim-1)].sum() > 0
 	else:
-		return sparse_chrom_list_dict[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
+		a =  sparse_chrom_list_dict[c][x[0]-1][x[1]-1-num_list[c], x[2]-1-num_list[c]] > 0
+	return a
 
 def generate_negative_cpu(x, x_chrom, forward=True):
 	global pair_ratio
@@ -357,6 +390,10 @@ def to_neighs_to_mask(to_neighs):
 	count = 0
 	column_indices = []
 	row_indices = []
+	if torch_has_csr:
+		crow_indices = [0]
+	else:
+		row_indices = []
 	v = []
 	
 	for i, samp_neigh in enumerate(samp_neighs):
@@ -377,8 +414,10 @@ def to_neighs_to_mask(to_neighs):
 					count += 1
 				column_indices.append(unique_nodes[n])
 
-				
-				row_indices.append(i)
+				if not torch_has_csr:
+					row_indices.append(i)
+			if torch_has_csr:
+				crow_indices.append(crow_indices[-1] + len(samp_neigh))
 		except:
 			print(i, samp_neigh, samp_neighs[i])
 			raise EOFError
@@ -390,8 +429,11 @@ def to_neighs_to_mask(to_neighs):
 	
 	unique_nodes_list = torch.LongTensor(unique_nodes_list)
 	
-	
-	return (row_indices,column_indices,  v, unique_nodes_list)
+	if torch_has_csr:
+		return (torch.from_numpy(np.asarray([crow_indices, column_indices])),  torch.from_numpy(v), unique_nodes_list)
+	else:
+		return (torch.from_numpy(np.asarray([row_indices, column_indices])), torch.from_numpy(v), unique_nodes_list)
+
 
 def sum_duplicates(col, data):
 	order = np.argsort(col)
@@ -404,7 +446,7 @@ def sum_duplicates(col, data):
 	data = np.add.reduceat(data, unique_inds)
 	return col, data
 
-def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1, training=False):
+def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1, training=False, chroms_in_batch=None):
 	if neg_num == 0:
 		y = np.ones((len(edges_part), 1))
 		w = np.ones((len(edges_part), 1)) * edge_weight.reshape((-1, 1))
@@ -574,8 +616,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 			y = np.concatenate(new_y, axis=0)
 			w = np.concatenate(new_w, axis=0)
 			x_chrom = np.concatenate(new_x_chrom, axis=0)
-
-	return x, y, w, x_chrom, to_neighs
+	return x, y, w, x_chrom, to_neighs, chroms_in_batch
 
 
 def train(model, loss, training_data_generator, validation_data_generator, optimizer, epochs, load_first, save_embed=False, save_name=""):
@@ -589,25 +630,28 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 	
 	if save_embed:
 		save_embeddings(model)
-		
+	
+	eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
+	
+	
+	train_pool = ProcessPoolExecutor(max_workers=cpu_num)
+	train_p_list = []
+	
 	for epoch_i in range(epochs):
 		if save_embed:
 			save_embeddings(model)
 		
 		print('[ Epoch', epoch_i, 'of', epochs, ']')
-		
-		pool = ProcessPoolExecutor(max_workers=cpu_num)
 		eval_p_list = []
-		
 		for i in range(update_num_per_eval_epoch):
-			edges_part, edges_chrom, edge_weight_part = validation_data_generator.next_iter()
+			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
 			eval_p_list.append(
-				pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False))
+				eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
 		
 		start = time.time()
 		
-		bce_loss, mse_loss, train_accu, auc1, auc2, str1, str2 = train_epoch(
-			model, loss, training_data_generator, optimizer)
+		bce_loss, mse_loss, train_accu, auc1, auc2, str1, str2, train_pool, train_p_list = train_epoch(
+			model, loss, training_data_generator, optimizer, train_pool, train_p_list)
 		print('  - (Training)   bce: {bce_loss: 7.4f}, mse: {mse_loss: 7.4f}, '
 			  ' acc: {accu:3.3f} %, {str1}: {auc1:3.3f}, {str2}: {auc2:3.3f}, '
 			  'elapse: {elapse:3.3f} s'.format(
@@ -621,10 +665,10 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			auc2=auc2,
 			elapse=(time.time() - start)))
 		
-		
 			
 		start = time.time()
-		valid_bce_loss, valid_accu, valid_auc1, valid_auc2, str1, str2 = eval_epoch(model, loss, validation_data_generator, eval_p_list)
+		valid_bce_loss, valid_accu, valid_auc1, valid_auc2, str1, str2 = eval_epoch(
+			model, loss, validation_data_generator, eval_p_list)
 		print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
 			  '  acc: {accu:3.3f} %,'
 			  '{str1}: {auc1:3.3f}, {str2}: {auc2:3.3f},'
@@ -638,15 +682,13 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			str2=str2,
 			elapse=(time.time() - start)))
 		
-		
-		
 		# Dynamic pair ratio for stage one
 		if dynamic_pair_ratio:
 			if pair_ratio < 0.5:
 				pair_ratio += 0.1
 			else:
 				pair_ratio = 0.5
-				scheduler.step(bce_loss)
+				# scheduler.step(bce_loss)
 			print("pair_ratio", pair_ratio)
 		
 		if not dynamic_pair_ratio:
@@ -655,9 +697,10 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 				no_improve = 0
 			else:
 				no_improve += 1
-			scheduler.step(bce_loss)
+				
+			# scheduler.step(bce_loss)
 		
-		if no_improve >= 3:
+		if no_improve >= 5:
 			print ("no improvement early stopping")
 			break
 		print ("no improve", no_improve)
@@ -750,7 +793,7 @@ def generate_attributes():
 
 		for i, c in enumerate(chrom_list):
 			temp = np.array(save_file["%d" % i]).astype('float32')
-			temp = StandardScaler().fit_transform(temp.reshape((-1, 1))).reshape((len(temp), -1))
+			# temp = StandardScaler().fit_transform(temp.reshape((-1, 1))).reshape((len(temp), -1))
 			chrom = np.zeros((len(temp), len(chrom_list))).astype('float32')
 			chrom[:, i] = 1
 			list1 = [temp, chrom]
@@ -914,14 +957,20 @@ if __name__ == '__main__':
 	chrom_list = config['chrom_list']
 	print (chrom_list)
 	
-	
+	# torch_has_csr = hasattr(torch, "sparse_csr_tensor")
+	# if torch_has_csr:
+	# 	print ("Your pytorch has sparse_csr_matrix, will use csr instead of coo")
+	# else:
+	# 	print ("pytorch sparse_csr_tensor not found, fallback to coo")
+	# pytorch csr in 1.10 still does not support backward
+	torch_has_csr = False
 	
 	if gpu_num < 2:
 		non_para_impute = True
 		impute_pool = None
 	else:
 		non_para_impute = False
-		impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
+		impute_pool = ProcessPoolExecutor(max_workers=gpu_num)
 		
 	weighted_adj = False
 	dimensions = config['dimensions']
@@ -987,21 +1036,29 @@ if __name__ == '__main__':
 	update_num_per_training_epoch = 1000
 	update_num_per_eval_epoch = 10
 	
-	batch_size = 192
-	
 	# Load everything from the hdf5 file
 	with h5py.File(os.path.join(temp_dir, "node_feats.hdf5"), "r") as input_f:
 		num = np.array(input_f['num'])
-		data = np.array(input_f['data']).astype('int')
-		weight = np.array(input_f['weight']).astype('float32')
-		chrom_info = np.array(input_f['chrom']).astype('int8')
+		train_data, train_weight, train_chrom = [], [], []
+		test_data, test_weight, test_chrom = [], [], []
+		
+		for c in range(len(chrom_list)):
+			train_data.append(np.array(input_f['train_data_%s' % chrom_list[c]]).astype('int'))
+			train_weight.append(np.array(input_f['train_weight_%s' % chrom_list[c]]).astype('float32'))
+			train_chrom.append(np.array(input_f['train_chrom_%s' % chrom_list[c]]).astype('int8'))
+			
+			test_data.append(np.array(input_f['test_data_%s' % chrom_list[c]]).astype('int'))
+			test_weight.append(np.array(input_f['test_weight_%s' % chrom_list[c]]).astype('float32'))
+			test_chrom.append(np.array(input_f['test_chrom_%s' % chrom_list[c]]).astype('int8'))
+			
 		distance2weight = np.array(input_f['distance2weight'])
 		total_sparsity_cell = np.array(input_f['sparsity'])
 		start_end_dict = np.array(input_f['start_end_dict'])
 		cell_feats = np.array(input_f['extra_cell_feats'])
 		cell_feats1 = np.array(input_f['cell2weight'])
-
-
+	
+	batch_size = int(256 * max((1000000 / res), 1) * max(num[0] / 6000, 1))
+	
 	num_list = np.cumsum(num)
 	max_bin = int(np.max(num[1:]))
 	cell_num = num[0]
@@ -1012,18 +1069,14 @@ if __name__ == '__main__':
 	distance2weight = distance2weight.reshape((-1, 1))
 	distance2weight = torch.from_numpy(distance2weight).float().to(device, non_blocking=True)
 	
-	index = np.arange(len(data))
-	np.random.shuffle(index)
-	train_index = index[:int(0.85 * len(index))]
-	test_index = index[int(0.85 * len(index)):]
 	
-	if mode == 'regression':
-		# normalize by cell
-		print ("normalize by cell")
-		for i in trange(cell_num):
-			cell = i + 1
-			weight[data[:, 0] == cell] /= (np.sum(weight[data[:, 0] == cell]) / 10000)
-		
+	# if mode == 'regression':
+	# 	# normalize by cell
+	# 	print ("normalize by cell")
+	# 	for i in trange(cell_num):
+	# 		cell = i + 1
+	# 		weight[data[:, 0] == cell] /= (np.sum(weight[data[:, 0] == cell]) / 10000)
+	#
 	
 	
 	total_possible = 0
@@ -1035,18 +1088,21 @@ if __name__ == '__main__':
 				total_possible += 1
 	
 	total_possible *= cell_num
-	sparsity = len(data) / total_possible
+	sparsity = np.sum([len(d)+len(d2) for d, d2 in zip(train_data, test_data)]) / total_possible
 	
 	
 	
 	# total_sparsity_cell = np.load(os.path.join(temp_dir, "sparsity.npy"))
-	print ("total_sparsity_cell", np.median(total_sparsity_cell), sparsity)
+	median_total_sparsity_cell = np.median(total_sparsity_cell)
+	print ("total_sparsity_cell", median_total_sparsity_cell, sparsity)
 	# Trust the original cell feature more if there are more non-zero entries for faster convergence.
 	# If there are more than 95% zero entries at 1Mb, then rely more on Higashi non-linear transformation
 	if np.median(total_sparsity_cell) >= 0.05:
+		print ("contractive loss")
 		contractive_flag = True
 		contractive_loss_weight = 1e-3
 	else:
+		print("no contractive loss")
 		contractive_flag = False
 		contractive_loss_weight = 0.0
 	
@@ -1061,29 +1117,9 @@ if __name__ == '__main__':
 		neg_num = 4
 	else:
 		neg_num = 5
+		
 	batch_size *= (1 + neg_num)
 	
-
-	print ("partition into training/test set")
-	train_data = data[train_index]
-	train_weight = weight[train_index]
-	train_chrom = chrom_info[train_index]
-	test_data = data[test_index]
-	test_weight = weight[test_index]
-	test_chrom = chrom_info[test_index]
-	print("data", data, np.max(data), data.shape, weight)
-	del data, weight, chrom_info
-	
-	train_mask = ((train_data[:, 2] - train_data[:, 1]) >= 2) #& ((train_data[:, 2] - train_data[:, 1]) < max_bin)
-	train_data = train_data[train_mask]
-	train_weight = train_weight[train_mask]
-	train_chrom = train_chrom[train_mask]
-
-	test_mask = ((test_data[:, 2] - test_data[:, 1]) >= 2) #& ((test_data[:, 2] - test_data[:, 1]) < max_bin)
-	test_data = test_data[test_mask]
-	test_weight = test_weight[test_mask]
-	test_chrom = test_chrom[test_mask]
-	#
 	
 	print("Node type num", num, num_list)
 	start_end_dict = np.concatenate([np.zeros((1, 2)), start_end_dict], axis=0).astype('int')
@@ -1114,6 +1150,9 @@ if __name__ == '__main__':
 	
 	
 	sparse_chrom_list = np.load(os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), allow_pickle=True)
+	for i in range(len(sparse_chrom_list)):
+		for j in range(len(sparse_chrom_list[i])):
+			sparse_chrom_list[i][j] = sparse_chrom_list[i][j].astype('float32')
 	
 	if not mem_efficient_flag:
 		import copy
@@ -1139,8 +1178,10 @@ if __name__ == '__main__':
 		train_weight, test_weight = transform_weight_class(train_weight, train_weight_mean, neg_num), \
 									transform_weight_class(test_weight, train_weight_mean, neg_num)
 	elif mode == 'rank':
-		weight += 1
-		
+		train_weight += 1
+		test_weight += 1
+	
+	
 	# Constructing the model
 	node_embedding_init = MultipleEmbedding(
 		embeddings_initial,
@@ -1204,7 +1245,6 @@ if __name__ == '__main__':
 											  int(batch_size / (neg_num + 1)),
 											  False, num_list, k=1)
 	
-	# del train_data, test_data, train_chrom, test_chrom, train_weight, test_weight,
 	steps = 1
 	# First round, no cell dependent GNN
 	if training_stage <= 1:
@@ -1217,7 +1257,7 @@ if __name__ == '__main__':
 		#       validation_data_generator=validation_data_generator,
 		#       optimizer=[optimizer], epochs=5,
 		#       load_first=False, save_embed=False)
-			
+		
 		
 		pair_ratio = 0.0
 		if mem_efficient_flag:
@@ -1271,28 +1311,17 @@ if __name__ == '__main__':
 	else:
 		min_bin = int(min_distance / res)
 
-	train_mask = ((train_data[:, 2] - train_data[:, 1]) > min_bin)   & ((train_data[:, 2] - train_data[:, 1]) < max_bin)
-	train_data = train_data[train_mask]
-	train_weight = train_weight[train_mask]
-	train_chrom = train_chrom[train_mask]
-
-	test_mask = ((test_data[:, 2] - test_data[:, 1]) > min_bin)   & ((test_data[:, 2] - test_data[:, 1]) < max_bin)
-	test_data = test_data[test_mask]
-	test_weight = test_weight[test_mask]
-	test_chrom = test_chrom[test_mask]
-
-	training_data_generator = DataGenerator(train_data, train_chrom, train_weight,
-	                                        int(batch_size / (neg_num + 1) * collect_num),
-	                                        True, num_list, k=collect_num)
-	validation_data_generator = DataGenerator(test_data, test_chrom, test_weight,
-	                                          int(batch_size / (neg_num + 1)),
-	                                          False, num_list, k=1)
-
+	if training_stage <= 3:
+		training_data_generator.filter_edges(min_bin, max_bin)
+		validation_data_generator.filter_edges(min_bin, max_bin)
 
 	alpha = 1.0
 	beta = 1e-3
 	dynamic_pair_ratio = False
 	use_recon = False
+	contractive_flag = False
+	contractive_loss_weight = 0.0
+	
 	if mem_efficient_flag:
 		pair_ratio = 0.5
 	else:
@@ -1310,8 +1339,9 @@ if __name__ == '__main__':
 
 	higashi_model.encode1.dynamic_nn = node_embedding2
 
-	optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
-
+	optimizer = torch.optim.Adam(list(higashi_model.parameters()) + list(node_embedding_init.parameters()),
+	                              lr=1e-3)
+	
 	scheduler = ReduceLROnPlateau(
 		optimizer,
 		patience=3,
@@ -1336,7 +1366,7 @@ if __name__ == '__main__':
 				  optimizer=[optimizer], epochs=no_nbr_epoch,
 				  load_first=False, save_embed=False,
 			      save_name="_stage2")
-			
+
 			checkpoint = {
 					'model_link': higashi_model.state_dict()}
 
@@ -1360,13 +1390,21 @@ if __name__ == '__main__':
 				torch.save(higashi_model, save_path + "_stage2_model")
 				cell_id_all = np.arange(num[0])
 				cell_id_all = np.array_split(cell_id_all, gpu_num-1)
+				select_gpus = get_free_gpu(gpu_num - 1)
 				for i in range(gpu_num-1):
-					impute_pool.submit(mp_impute, args.config, save_path + "_stage2_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, 0, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), None)
-					time.sleep(30)
+					impute_pool.submit(mp_impute, args.config,
+					                   save_path + "_stage2_model",
+					                   "%s_nbr_%d_impute_local100_part_%d" %(embedding_name, 0, i),
+					                   mode, np.min(cell_id_all[i]),
+					                   np.max(cell_id_all[i]) + 1,
+					                   os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"),
+					                   None,
+					                   select_gpus[i])
+					# time.sleep(30)
 				impute_pool.shutdown(wait=True)
 
-				impute_pool = ProcessPoolExecutor(max_workers=gpu_num - 1)
-				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 0), cell_id_all, temp_dir, impute_list, None)
+				impute_pool = ProcessPoolExecutor(max_workers=gpu_num)
+				linkhdf5("%s_nbr_%d_impute_local100" % (embedding_name, 0), cell_id_all, temp_dir, impute_list, None)
 
 	if impute_with_nbr_flag:
 		nbr_mode = 0
@@ -1421,9 +1459,14 @@ if __name__ == '__main__':
 		#                                                 pass_remove=False).to(device, non_blocking=True)
 		#
 		# higashi_model.encode1.dynamic_nn = node_embedding1
-
+		
+		# higashi_model = torch.load(save_path + "_stage2_model", map_location=current_device)
+		# embeddings_initial = higashi_model.encode1.static_nn
+		print (node_embedding_init.on_hook_set)
+		print (higashi_model.encode1.dynamic_nn.fix)
+		
 		optimizer = torch.optim.Adam(higashi_model.parameters(), lr=1e-3)
-
+		
 		scheduler = ReduceLROnPlateau(
 			optimizer,
 			patience=3,
@@ -1450,13 +1493,16 @@ if __name__ == '__main__':
 
 			torch.save(checkpoint, save_path+"_stage3")
 
+			del training_data_generator, validation_data_generator
 		# Loading Stage 3
 		checkpoint = torch.load(save_path + "_stage3", map_location=current_device)
 		higashi_model.load_state_dict(checkpoint['model_link'])
 
 
-		del training_data_generator, validation_data_generator
+
 		del sparse_chrom_list, weight_dict
+
+
 
 		# Impute Stage 3
 		if impute_with_nbr_flag:
@@ -1464,12 +1510,21 @@ if __name__ == '__main__':
 				cell_id_all = [np.arange(num[0])]
 				impute_process(args.config, higashi_model, "%s_nbr_%d_impute"  % (embedding_name, neighbor_num-1), mode, 0, num[0], os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy" ), os.path.join(temp_dir, "weighted_info.npy"))
 			else:
+				select_gpus = get_free_gpu(gpu_num - 1)
+				print ("select gpus", select_gpus)
 				torch.save(higashi_model, save_path + "_stage3_model")
 				cell_id_all = np.arange(num[0])
 				cell_id_all = np.array_split(cell_id_all, gpu_num-1)
-				for i in range(gpu_num-1):
-					impute_pool.submit(mp_impute, args.config, save_path + "_stage3_model", "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num-1, i), mode, np.min(cell_id_all[i]), np.max(cell_id_all[i]) + 1, os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"), os.path.join(temp_dir, "weighted_info.npy"))
-					time.sleep(30)
+				for i in range(gpu_num-2, -1, -1):
+					impute_pool.submit(mp_impute, args.config,
+					                   save_path + "_stage3_model",
+					                   "%s_nbr_%d_impute_part_%d" %(embedding_name, neighbor_num-1, i),
+					                   mode, np.min(cell_id_all[i]),
+					                   np.max(cell_id_all[i]) + 1,
+					                   os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"),
+					                   os.path.join(temp_dir, "weighted_info.npy"),
+					                   select_gpus[i])
+					# time.sleep(30)
 
 				impute_pool.shutdown(wait=True)
 
