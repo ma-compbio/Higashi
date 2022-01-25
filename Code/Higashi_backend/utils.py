@@ -171,11 +171,19 @@ def parallel_build_hash(data, func, num, initial = None, compress = False):
 
 def skip_start_end(config, chrom="chr1"):
 	res = config['resolution']
-	gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None)
-	gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
-	gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
-	start = np.floor((np.array(gap_list['start']) - 100000) / res).astype('int')
-	end = np.ceil((np.array(gap_list['end']) + 100000) / res).astype('int')
+	if 'cytoband_path' in config:
+		cytoband_path = config['cytoband_path']
+		gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None)
+		gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
+		gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
+		start = np.floor((np.array(gap_list['start']) - 100000) / res).astype('int')
+		end = np.ceil((np.array(gap_list['end']) + 100000) / res).astype('int')
+	else:
+		cytoband_path = None
+		start = []
+		end = []
+		
+	
 	return start, end
 
 def generate_binpair( start, end, min_bin_, max_bin_, not_use_set=None):
@@ -211,18 +219,24 @@ def linkhdf5_one_chrom(chrom, name, cell_id_splits, temp_dir, impute_list, name2
 			if i == 0:
 				f.create_dataset('coordinates', data=input_f['coordinates'])
 			for cell in ids:
-				v1 = np.array(input_f["cell_%d" % (cell)])
-				if name2 is not None:
-					v2 = np.array(f1["cell_%d" % (cell)])
-					v = v1 / np.mean(v1) + v2 / np.mean(v2)
-				else:
-					v = v1 / np.mean(v1)
-				f.create_dataset('cell_%d' % cell, data=v, compression="gzip", compression_opts=6)
+				try:
+					v1 = np.array(input_f["cell_%d" % (cell)])
+					if name2 is not None:
+						v2 = np.array(f1["cell_%d" % (cell)])
+						v = v1 / np.mean(v1) + v2 / np.mean(v2)
+					else:
+						v = v1 / np.mean(v1)
+					f.create_dataset('cell_%d' % cell, data=v, compression="gzip", compression_opts=6)
+				except:
+					pass
 				bar.update(1)
 
 	f.close()
 	if name2 is not None:
 		f1.close()
+	print ("start removing temp files")
+	for i in range(len(cell_id_splits)):
+		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
 def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 	print("start linking hdf5 files")
@@ -231,9 +245,9 @@ def linkhdf5(name, cell_id_splits, temp_dir, impute_list, name2=None):
 		# linkhdf5_one_chrom( chrom, name, np.copy(cell_id_splits), temp_dir, impute_list, name2)
 		pool.submit(linkhdf5_one_chrom, chrom, name, np.copy(cell_id_splits), temp_dir, impute_list, name2)
 	pool.shutdown(wait=True)
-	for chrom in impute_list:
-		for i in range(len(cell_id_splits)):
-			os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
+	# for chrom in impute_list:
+	# 	for i in range(len(cell_id_splits)):
+	# 		os.remove(os.path.join(temp_dir, "%s_%s_part_%d.hdf5" % (chrom, name, i)))
 
 
 
@@ -256,6 +270,7 @@ def get_neighbor_mask():
 	return neighbor_mask
 
 def remove_BE_linear(temp1, config, data_dir, cell_feats1):
+	
 	if "batch_id" in config:
 		print ("initial removing BE")
 		if type(temp1) is list:
@@ -268,9 +283,20 @@ def remove_BE_linear(temp1, config, data_dir, cell_feats1):
 		# 	new_batch_id_info[batch_id_info == u, i] += 1
 		# batch_id_info = np.array(new_batch_id_info)
 		# temp1 = temp1 - LinearRegression().fit(batch_id_info, temp1).predict(batch_id_info)
-
-
+	elif "regress_cov" in config:
+		if config['regress_cov']:
+			print("initial removing BE")
+			if type(temp1) is list:
+				temp1 = np.concatenate(temp1, axis=-1)
+			cell_feats1 = cell_feats1.detach().cpu().numpy()
+			temp1 = temp1 - LinearRegression().fit(cell_feats1, temp1).predict(cell_feats1)
+		else:
+			if type(temp1) is list:
+				temp1 = np.concatenate(temp1, axis=-1)
 	else:
+		# print("initial removing BE")
 		if type(temp1) is list:
 			temp1 = np.concatenate(temp1, axis=-1)
+		# cell_feats1 = cell_feats1.detach().cpu().numpy()
+		# temp1 = temp1 - LinearRegression().fit(cell_feats1, temp1).predict(cell_feats1)
 	return temp1
