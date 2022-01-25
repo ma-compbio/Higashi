@@ -5,16 +5,83 @@ import h5py
 import torch
 import torch.nn.functional as F
 from Higashi_backend.utils import get_config, generate_binpair, skip_start_end
+from sklearn.preprocessing import normalize
+from Higashi_backend.Modules import moving_avg
+from sklearn.metrics import pairwise_distances
+torch.set_num_threads(1)
+
+def get_weights(config):
+	temp_dir = config['temp_dir']
+	embedding_name = config['embedding_name']
+	embed_dir = os.path.join(temp_dir, "embed")
+	
+	v = np.load(os.path.join(embed_dir, "%s_0_origin.npy" % embedding_name))
+	distance = pairwise_distances(v, metric='euclidean')
+	distance_sorted = np.sort(distance, axis=-1)
+	distance /= np.quantile(distance_sorted[:, 1:15].reshape((-1)), q=0.25)
+
+	new_w = np.exp(-distance)
+	new_w /= np.sum(new_w, axis=-1)
+
+	return new_w
+
+def prep_one(weighted_adj, chrom_list, impute_list, local_transfer_range, cell):
+	global cell_neighbor_list, weight_dict, sparse_chrom_list, cell_weight, origin_sparse_list
+	cell_chrom_list, mtx_list = [], ["" for i in range(len(chrom_list))]
+	
+	if weighted_adj:
+		for chrom_index_in_impute, chrom in enumerate(impute_list):
+			c = chrom_list.index(chrom)
+			mtx = 0
+			for nbr_cell in cell_neighbor_list[cell]:
+				balance_weight = weight_dict[(nbr_cell, cell)]
+				mtx = mtx + balance_weight * sparse_chrom_list[c][nbr_cell - 1]
+			
+			adj = moving_avg(mtx, local_transfer_range)
+			adj.data = np.log1p(adj.data)
+			adj = normalize(adj, norm='l1', axis=1).astype('float32')
+			Acoo = adj.tocoo()
+			row_indices, column_indices, v = Acoo.row, Acoo.col, Acoo.data
+			indice, v = torch.from_numpy(np.asarray([row_indices, column_indices])), torch.from_numpy(v)
+			# a = origin_sparse_list[].toarray()
+			# a = a / (np.sum(a)+1e-15) * a.shape[0]
+			# mtx_list.append(a)
+			cell_chrom_list.append([indice, v, adj.shape])
+	else:
+		# weight1 = cell_weight[cell - 1]
+		# select = np.argsort(weight1)[::-1][:100]
+		for chrom_index_in_impute, chrom in enumerate(impute_list):
+			c = chrom_list.index(chrom)
+			mtx = sparse_chrom_list[c][cell - 1]
+			adj = moving_avg(mtx, local_transfer_range)
+			adj.data = np.log1p(adj.data)
+			adj = normalize(adj, norm='l1', axis=1).astype('float32')
+			Acoo = adj.tocoo()
+			row_indices, column_indices, v = Acoo.row, Acoo.col, Acoo.data
+			indice, v = torch.from_numpy(np.asarray([row_indices, column_indices])), torch.from_numpy(v)
+			# a = np.sum(origin_sparse_list[chrom_index_in_impute][select], axis=0).toarray()
+			# a  = a + np.diag(np.sum(a, axis=-1) == 0)
+			# a = normalize(a, axis=1, norm='l1')
+			# a =  sqrt_norm(a)
+			# a = origin_sparse_list[c][cell-1].toarray()
+			# a = a / (np.sum(a) + 1e-15) * a.shape[0]
+			# mtx_list[c] = a
+			cell_chrom_list.append([indice, v, adj.shape])
+			
+	return cell, cell_chrom_list, mtx_list
 
 def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_path, weighted_info=None):
+	global cell_neighbor_list, weight_dict, sparse_chrom_list, cell_weight, origin_sparse_list
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	config = get_config(config_path)
 	res = config['resolution']
 	impute_list = config['impute_list']
 	chrom_list = config['chrom_list']
 	temp_dir = config['temp_dir']
+	raw_dir = os.path.join(temp_dir, "raw")
 	min_distance = config['minimum_distance']
 	local_transfer_range = config['local_transfer_range']
+	cell_weight = get_weights(config)
 	if "impute_verbose" in config:
 		impute_verbose = config['impute_verbose']
 	else:
@@ -39,9 +106,10 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	if weighted_info is not None:
 		weighted_info = np.load(weighted_info, allow_pickle=True)
 		
-		
-		
-
+	# origin_sparse_list = []
+	# for chrom in impute_list:
+	# 	origin_sparse_list.append(np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True))
+	
 	model.eval()
 	model.only_model = True
 	embedding_init = model.encode1.static_nn
@@ -50,7 +118,6 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	embedding_init.wstack = embedding_init.wstack.cpu()
 
 	torch.cuda.empty_cache()
-	# print("off hook & save mem")
 	
 	with torch.no_grad():
 		try:
@@ -65,8 +132,10 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	chrom_info = []
 	big_samples_chrom = []
 	slice_start = 0
+	route_nn_list = []
 	for chrom in impute_list:
 		j = chrom_list.index(chrom)
+		route_nn_list.append(j+1)
 		bin_ids.append(np.arange(num_list[j], num_list[j + 1]) + 1)
 		chrom_info.append(np.ones(num_list[j + 1] - num_list[j]) * j)
 		if "minimum_impute_distance" in config:
@@ -128,43 +197,30 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	else:
 		weighted_adj = False
 
-	# with h5py.File(os.path.join(temp_dir, "node_feats.hdf5"), "r") as input_f:
-	# 	distance2weight = np.array(input_f['distance2weight']).reshape((-1, 1))
-	# distance2weight = torch.from_numpy(distance2weight).to(device)
-
+	# bulk_adj = [embedding_init.embeddings[chrom+1].embedding.clone() for chrom in range(len(chrom_list))]
+	
+	model.encode1.dynamic_nn.forward = model.encode1.dynamic_nn.forward_off_hook
 	with torch.no_grad():
 		count = 0
-		for i in range(cell_start, cell_end):
+		cell_list = list(np.arange(cell_start, cell_end))
+		for i in cell_list:
 			cell = i + 1
-			if weighted_adj:
-				cell_chrom_list = []
-				for chrom_index_in_impute, chrom in enumerate(impute_list):
-					c = chrom_list.index(chrom)
-					mtx = 0
-					for nbr_cell in cell_neighbor_list[cell]:
-						balance_weight = weight_dict[(nbr_cell, cell)]
-						mtx = mtx + balance_weight * sparse_chrom_list[c][nbr_cell - 1]
-
-					cell_chrom_list.append(mtx)
-				cell_chrom_list = np.array(cell_chrom_list)
-			else:
-				cell_chrom_list = []
-				for chrom_index_in_impute, chrom in enumerate(impute_list):
-					c = chrom_list.index(chrom)
-					mtx = sparse_chrom_list[c][cell-1]
-					cell_chrom_list.append(mtx)
-				cell_chrom_list = np.array(cell_chrom_list)
-
-			try:
-				model.encode1.dynamic_nn.fix_cell2(cell, bin_ids, cell_chrom_list, local_transfer_range)
-			except:
-				pass
+			cell, cell_chrom_list, mtx_list = prep_one(weighted_adj, chrom_list, impute_list, local_transfer_range, cell)
 			
+			# for chrom in range(len(chrom_list)):
+			# 	a = mtx_list[chrom]
+			# 	if len(a) == 0:
+			# 		continue
+			#
+			# 	embedding_init.embeddings[chrom+1].embedding[:, :a.shape[-1]] = torch.from_numpy(a).to(device)
+			# embedding_init = embedding_init.to(device)
+			# embedding_init.off_hook()
+			
+			model.encode1.dynamic_nn.fix_cell2(cell, bin_ids, cell_chrom_list, local_transfer_range, route_nn_list=route_nn_list)
 			big_samples[:, 0] = cell
 			proba = model.predict(big_samples, big_samples_chrom, verbose=False, batch_size=int(1e5),
 			                      activation=activation, extra_info=None).reshape((-1))
 			
-
 			for chrom in impute_list:
 				slice_start, slice_end, f = chrom2info[chrom]
 				v = np.array(proba[slice_start:slice_end])
@@ -179,9 +235,12 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 			
 	
 	print("finish imputing, used %.2f s" % (time.time() - start))
+	embedding_init.on_hook()
+	embedding_init.off_hook([0])
 	model.train()
 	model.only_model = False
 	model.encode1.dynamic_nn.fix = False
+	model.encode1.dynamic_nn.train()
 	torch.cuda.empty_cache()
 	for s in embedding_init.embeddings:
 		s.embedding = s.embedding.to(device)
@@ -228,6 +287,7 @@ if __name__ == '__main__':
 			current_device = get_free_gpu()
 		else:
 			current_device = 'cpu'
+	print ("current_device", current_device)
 	model = torch.load(path, map_location=current_device)
 	print(config_path, path, name, mode, cell_start, cell_end)
 	impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_path, weighted_info)
