@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='hqigashi',
+    name='higashi',
     version='0.2.0',
     description='Higashi: Multiscale and integrative scHi-C analysis',
     url='https://github.com/ma-compbio/Higashi',
