@@ -1,10 +1,10 @@
 import multiprocessing as mp
 import warnings
 import torch.optim
-from Higashi_backend.Modules import *
-from Higashi_backend.Functions import *
-from Higashi_backend.utils import *
-from Impute import impute_process
+from .Higashi_backend.Modules import *
+from .Higashi_backend.Functions import *
+from .Higashi_backend.utils import *
+from .Impute import impute_process
 import argparse
 import resource
 from scipy.sparse import csr_matrix
@@ -1564,12 +1564,12 @@ class Higashi():
 if __name__ == '__main__':
 	# Get parameters from config file
 	args = parse_args()
-	higashi = Higashi(args.config)
-	higashi.prep_model()
+	# higashi = Higashi(args.config)
+	# higashi.prep_model()
 	# higashi.train_for_embeddings()
 	# higashi.train_for_imputation_nbr_0()
 	# higashi.impute_no_nbr()
-	higashi.train_for_imputation_with_nbr()
+	# higashi.train_for_imputation_with_nbr()
 	# higashi.impute_with_nbr()
 	# if impute_no_nbr_flag or impute_with_nbr_flag:
 	#

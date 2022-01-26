@@ -5,8 +5,8 @@ import math
 import numpy as np
 import torch.cuda
 
-from Higashi_backend.utils import *
-from Higashi_backend.Functions import *
+from .utils import *
+from .Functions import *
 import multiprocessing
 import time
 from torch.nn.utils.rnn import pad_sequence
