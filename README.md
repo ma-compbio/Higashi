@@ -32,6 +32,10 @@ Please see [the wiki](https://github.com/ma-compbio/Higashi/wiki) for extensive 
 
 Higashi is constantly being updated, see [change log](https://github.com/ma-compbio/Higashi/wiki/Change-Log) for the updating history
 
+# Tutorial
+- [4DN sci-Hi-C (Kim et al.)](https://github.com/ma-compbio/Higashi/blob/main/tutorials/4DN_sci-Hi-C_Kim%20et%20al.ipynb)
+- [Ramani et al.](https://github.com/ma-compbio/Higashi/blob/main/tutorials/Ramani%20et%20al.ipynb)
+
 # Cite
 
 Cite our paper by
