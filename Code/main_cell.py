@@ -1394,7 +1394,7 @@ if __name__ == '__main__':
 				for i in range(gpu_num-1):
 					impute_pool.submit(mp_impute, args.config,
 					                   save_path + "_stage2_model",
-					                   "%s_nbr_%d_impute_local100_part_%d" %(embedding_name, 0, i),
+					                   "%s_nbr_%d_impute_part_%d" %(embedding_name, 0, i),
 					                   mode, np.min(cell_id_all[i]),
 					                   np.max(cell_id_all[i]) + 1,
 					                   os.path.join(temp_dir, "sparse_nondiag_adj_nbr_1.npy"),
@@ -1404,7 +1404,7 @@ if __name__ == '__main__':
 				impute_pool.shutdown(wait=True)
 
 				impute_pool = ProcessPoolExecutor(max_workers=gpu_num)
-				linkhdf5("%s_nbr_%d_impute_local100" % (embedding_name, 0), cell_id_all, temp_dir, impute_list, None)
+				linkhdf5("%s_nbr_%d_impute" % (embedding_name, 0), cell_id_all, temp_dir, impute_list, None)
 
 	if impute_with_nbr_flag:
 		nbr_mode = 0

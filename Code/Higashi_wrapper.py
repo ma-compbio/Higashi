@@ -1391,7 +1391,7 @@ class Higashi():
 			for i in range(self.gpu_num - 1):
 				impute_pool.submit(mp_impute, self.config_path,
 				                   self.save_path + "_stage2_model",
-				                   "%s_nbr_%d_impute_local100_part_%d" % (self.embedding_name, 0, i),
+				                   "%s_nbr_%d_impute_part_%d" % (self.embedding_name, 0, i),
 				                   self.mode, np.min(cell_id_all[i]),
 				                   np.max(cell_id_all[i]) + 1,
 				                   os.path.join(self.temp_dir, "sparse_nondiag_adj_nbr_1.npy"),
@@ -1399,7 +1399,7 @@ class Higashi():
 				                   select_gpus[i])
 			
 			impute_pool.shutdown(wait=True)
-			linkhdf5("%s_nbr_%d_impute_local100" % (self.embedding_name, 0), cell_id_all, self.temp_dir, self.impute_list,
+			linkhdf5("%s_nbr_%d_impute" % (self.embedding_name, 0), cell_id_all, self.temp_dir, self.impute_list,
 			         None)
 
 	def train_for_imputation_with_nbr(self):
