@@ -15,6 +15,12 @@ from sklearn.preprocessing import normalize
 from scipy.sparse import diags, vstack
 from scipy.stats import norm
 
+try:
+	get_ipython()
+	from tqdm.notebook import tqdm, trange
+except:
+	pass
+
 cpu_num = multiprocessing.cpu_count()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.float32)
@@ -1413,7 +1419,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 		
 		self.nn = nn.Linear(input_size * self.feat_dim, embed_dim)
 		self.num_list = torch.as_tensor(num_list)
-		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim], dtype=torch.float, device=device)
+		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim*input_size], dtype=torch.float, device=device)
 		self.fix = False
 		self.forward = self.forward_on_hook
 		
@@ -1426,6 +1432,13 @@ class GraphSageEncoder_with_weights(nn.Module):
 	def fix_cell2(self, cell, bin_ids=None, sparse_matrix=None, local_transfer_range=0, route_nn_list=None):
 		self.fix = True
 		self.eval()
+		input_size = 1
+		if not self.gcn:
+			input_size += 1
+		if self.transfer_range > 0:
+			input_size += 1
+		self.bin_feats = torch.zeros([int(self.num_list[-1]) + 1, self.feat_dim * input_size], dtype=torch.float,
+		                             device=device)
 		# instead of
 		with torch.no_grad():
 			for chrom, bin_id in enumerate(bin_ids):
@@ -1452,7 +1465,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 					combined = torch.cat(list1, dim=-1)
 				else:
 					combined = list1[0]
-				combined = activation_func(self.nn(combined))
+				
 				self.bin_feats[nodes_flatten] = combined.detach().clone()
 	
 	
@@ -1464,7 +1477,7 @@ class GraphSageEncoder_with_weights(nn.Module):
 			nodes_flatten = nodes[:, 1:].contiguous().view(-1)
 			
 		cell_feats = self.cell_feats[nodes[:, 0] - 1, :]
-		neigh_feats = self.bin_feats[nodes_flatten, :].view(sz_b, len_seq - 1, -1)
+		neigh_feats = activation_func(self.nn(self.bin_feats[nodes_flatten, :])).view(sz_b, len_seq - 1, -1)
 		return torch.cat([cell_feats[:, None, :], neigh_feats], dim=1).view(sz_b, len_seq, -1), \
 		       torch.cat([cell_feats[:, None, :], self.features(nodes_flatten).view(sz_b, len_seq - 1, -1)
 					], dim=1).view(sz_b, len_seq, -1)

@@ -15,7 +15,6 @@ import subprocess
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import copy
-
 try:
 	get_ipython()
 	from tqdm.notebook import tqdm, trange
@@ -35,12 +34,12 @@ def parse_args():
 	return parser.parse_args()
 
 
-def get_free_gpu(num=1):
+def get_free_gpu(num=1, change_cur=True):
 	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')
 	memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
 	if len(memory_available) > 0:
 		max_mem = np.max(memory_available)
-		if num == 1:
+		if num == 1 and change_cur:
 			ids = np.where(memory_available == max_mem)[0]
 			chosen_id = int(np.random.choice(ids, 1)[0])
 			print("setting to gpu:%d" % chosen_id)
@@ -403,7 +402,13 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight,
 
 
 def mp_impute(config_path, path, name, mode, cell_start, cell_end, sparse_path, weighted_info=None, gpu_id=None):
-	cmd = ["python", "Impute.py", config_path, path, name, mode, str(int(cell_start)), str(int(cell_end)), sparse_path]
+	import os
+	path1 = os.path.abspath(__file__)
+	dir_path = os.path.dirname(path1)
+	print(dir_path)
+	impute_file_path = str(os.path.join(dir_path, "Impute.py"))
+	print (impute_file_path)
+	cmd = ["python", impute_file_path, config_path, path, name, mode, str(int(cell_start)), str(int(cell_end)), sparse_path]
 	if weighted_info is not None:
 		cmd += [weighted_info]
 	else:
@@ -424,20 +429,19 @@ class Higashi():
 		self.config_path = config_path
 		self.config = get_config(config_path)
 		
-		from Process import create_dir
+		from .Process import create_dir
 		create_dir(self.config)
 		warnings.filterwarnings("ignore")
 		rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 		resource.setrlimit(resource.RLIMIT_NOFILE, (3600, rlimit[1]))
-		self.fetch_info_from_config()
-		self.prep_model()
+		
 		
 	# For processing data: old Process.py
 	def process_data(self):
 		self.generate_chrom_start_end()
 		self.extract_table()
 		self.create_matrix()
-		from Process import process_signal, impute_all
+		from .Process import process_signal, impute_all
 		if "coassay" in self.config:
 			if self.config["coassay"]:
 				process_signal(self.config)
@@ -447,15 +451,15 @@ class Higashi():
 				impute_all(self.config)
 	
 	def generate_chrom_start_end(self):
-		from Process import generate_chrom_start_end
+		from .Process import generate_chrom_start_end
 		generate_chrom_start_end(self.config)
 	
 	def extract_table(self):
-		from Process import extract_table
+		from .Process import extract_table
 		extract_table(self.config)
 	
 	def create_matrix(self):
-		from Process import create_matrix
+		from .Process import create_matrix
 		create_matrix(self.config)
 	
 	# fetch information from config.JSON
@@ -610,6 +614,7 @@ class Higashi():
 	
 	# Prepare the model for training and imputation
 	def prep_model(self):
+		self.fetch_info_from_config()
 		global pair_ratio, weighted_adj, num, num_list, start_end_dict, mem_efficient_flag
 		global neg_num, max_bin, mode, graphsagemode, precompute_weighted_nbr, weighted_adj
 		global cell_neighbor_list, cell_neighbor_weight_list
@@ -1387,7 +1392,7 @@ class Higashi():
 			torch.save(self.higashi_model, self.save_path + "_stage2_model")
 			cell_id_all = np.arange(self.num[0])
 			cell_id_all = np.array_split(cell_id_all, self.gpu_num - 1)
-			select_gpus = get_free_gpu(self.gpu_num - 1)
+			select_gpus = get_free_gpu(self.gpu_num - 1, change_cur=False)
 			for i in range(self.gpu_num - 1):
 				impute_pool.submit(mp_impute, self.config_path,
 				                   self.save_path + "_stage2_model",
@@ -1503,7 +1508,7 @@ class Higashi():
 			               os.path.join(self.temp_dir, "weighted_info.npy"))
 		else:
 			impute_pool = ProcessPoolExecutor(max_workers=self.gpu_num)
-			select_gpus = get_free_gpu(self.gpu_num - 1)
+			select_gpus = get_free_gpu(self.gpu_num - 1, change_cur=False)
 			print("select gpus", select_gpus)
 			torch.save(self.higashi_model, self.save_path + "_stage3_model")
 			cell_id_all = np.arange(self.num[0])

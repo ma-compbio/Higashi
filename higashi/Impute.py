@@ -4,11 +4,61 @@ import time
 import h5py
 import torch
 import torch.nn.functional as F
-from Higashi_backend.utils import get_config, generate_binpair, skip_start_end
+import json
+import pandas as pd
+from scipy.sparse import diags, vstack
+from scipy.stats import norm
 from sklearn.preprocessing import normalize
-from Higashi_backend.Modules import moving_avg
+
 from sklearn.metrics import pairwise_distances
 torch.set_num_threads(1)
+
+def moving_avg(adj, moving_range):
+	adj_origin = adj.copy()
+	adj = adj.copy()
+	adj = adj * norm.pdf(0)
+	for i in range(moving_range * 2):
+		before_list = [adj_origin[0, :]] * (i+1) + [adj_origin[:-(i+1), :]]
+		adj_before = vstack(before_list)
+		after_list = [adj_origin[i+1:, :]] + [adj_origin[-1, :]] * (i+1)
+		adj_after = vstack(after_list)
+		adj = adj + (adj_after + adj_before) * norm.pdf((i+1) / moving_range)
+	return adj
+
+
+def skip_start_end(config, chrom="chr1"):
+	res = config['resolution']
+	if 'cytoband_path' in config:
+		cytoband_path = config['cytoband_path']
+		gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None)
+		gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
+		gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
+		start = np.floor((np.array(gap_list['start']) - 100000) / res).astype('int')
+		end = np.ceil((np.array(gap_list['end']) + 100000) / res).astype('int')
+	else:
+		cytoband_path = None
+		start = []
+		end = []
+	
+	return start, end
+
+def get_config(config_path = "./config.jSON"):
+	c = open(config_path,"r")
+	return json.load(c)
+
+def generate_binpair( start, end, min_bin_, max_bin_, not_use_set=None):
+	if not_use_set is None:
+		not_use_set = set()
+	samples = []
+	for bin1 in range(start, end):
+		if bin1 in not_use_set:
+			continue
+		for bin2 in range(bin1 + min_bin_, min(bin1 + max_bin_, end)):
+			if bin2 in not_use_set:
+				continue
+			samples.append([bin1, bin2])
+	samples = np.array(samples) + 1
+	return samples
 
 def get_weights(config):
 	temp_dir = config['temp_dir']
@@ -115,7 +165,7 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	embedding_init = model.encode1.static_nn
 	# print ("start off hook")
 	embedding_init.off_hook()
-	embedding_init.wstack = embedding_init.wstack.cpu()
+	# embedding_init.wstack = embedding_init.wstack.cpu()
 
 	torch.cuda.empty_cache()
 	

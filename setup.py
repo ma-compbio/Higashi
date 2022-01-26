@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 print (find_packages())
 setup(
     name='higashi',
-    version='0.2.0.2a4',
+    version='0.1.0a0',
     description='Higashi: Multiscale and integrative scHi-C analysis',
     url='https://github.com/ma-compbio/Higashi',
     include_package_data=True,

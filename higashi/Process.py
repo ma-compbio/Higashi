@@ -1,7 +1,16 @@
 import argparse
 import shutil
-from Higashi_backend.Modules import *
-from Higashi_analysis.Higashi_analysis import *
+
+try:
+	from Higashi_backend.Modules import *
+	from Higashi_analysis.Higashi_analysis import *
+except:
+	try:
+		from .Higashi_backend.Modules import *
+		from .Higashi_analysis.Higashi_analysis import *
+	except:
+		raise EOFError
+
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm, trange
@@ -15,6 +24,12 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import normalize
 import subprocess
 from scipy.ndimage import gaussian_filter
+
+try:
+	get_ipython()
+	from tqdm.notebook import tqdm, trange
+except:
+	pass
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

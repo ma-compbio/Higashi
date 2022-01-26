@@ -1,7 +1,13 @@
 import cooler
 import numpy as np
 import torch
-from tqdm import tqdm, trange
+
+try:
+	get_ipython()
+	from tqdm.notebook import tqdm, trange
+except:
+	from tqdm import tqdm, trange
+	pass
 from sklearn.metrics import average_precision_score
 from sklearn.metrics import roc_auc_score, pairwise_distances
 from concurrent.futures import as_completed, ProcessPoolExecutor
