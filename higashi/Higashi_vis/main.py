@@ -66,7 +66,7 @@ def oe(matrix, expected = None):
 		if expected is not None:
 			expect = expected[k]
 		else:
-			expect = np.mean(diag)
+			expect = np.nanmean(diag)
 		if expect == 0:
 			new_matrix[rows, cols] = 0.0
 		else:
@@ -86,8 +86,10 @@ def create_mask(k=30):
 	timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 	msg_list.append("%s - First heatmap on this chromosome, indexing" % timestr)
 	format_message()
-	final = np.array(np.sum(origin_sparse, axis=0).todense())
-	
+	try:
+		final = np.array(np.sum(origin_sparse, axis=0).todense())
+	except:
+		final = np.array(np.sum(origin_sparse, axis=0))
 	size = origin_sparse[0].shape[-1]
 	a = np.zeros((size, size))
 	if k > 0:
@@ -97,7 +99,7 @@ def create_mask(k=30):
 				a[j + i, j] = 1
 		a = np.ones_like((a)) - a
 	
-	gap = np.sum(final, axis=-1, keepdims=False) == 0
+	gap = np.nansum(final, axis=-1, keepdims=False) == 0
 	if 'cytoband_path' in config:
 		gap_tab = pd.read_table(config['cytoband_path'], sep="\t", header=None)
 		gap_tab.columns = ['chrom','start','end','sth', 'type']
@@ -125,11 +127,11 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None, force_v
 	if type(matrix) is not np.ndarray:
 		matrix = np.array(matrix.todense())
 	
-	if np.sum(matrix > 0) == 0:
+	if np.nansum(matrix > 0) == 0:
 		return white_img
 	
 	if VC_button.active:
-		coverage = (np.sqrt(np.sum(matrix, axis=-1)) + 1e-8)
+		coverage = (np.sqrt(np.nansum(matrix, axis=-1)) + 1e-8)
 		matrix = matrix / coverage.reshape((-1, 1))
 		matrix = matrix / coverage.reshape((1, -1))
 	
@@ -149,7 +151,7 @@ def plot_heatmap_RdBu_tad(matrix, normalize=True, cbar=False, cmap=None, force_v
 	matrix = np.ma.masked_where(mask1, matrix)
 	
 	
-	# use_rows = np.where(np.sum(mask1 == 1, axis=0) != len(matrix))[0]
+	# use_rows = np.where(np.nansum(mask1 == 1, axis=0) != len(matrix))[0]
 	# matrix = matrix[use_rows, :]
 	# matrix = matrix[:, use_rows]
 	# mask1 = mask1[use_rows, :]
@@ -242,7 +244,10 @@ def async_heatmap11(selected, id):
 			b = np.sum(origin_sparse[selected], axis=0) / len(selected)
 		else:
 			b = origin_sparse[selected[0]]
-		b = np.array(b.todense())
+		try:
+			b = np.array(b.todense())
+		except:
+			b = np.array(b)
 		print (b)
 		b = plot_heatmap_RdBu_tad(b, force_vmin=0)
 	except Exception as e:
@@ -480,24 +485,27 @@ def update_scatter(selected):
 		print ("type error", type(selected))
 		raise EOFError
 	
-	source.data['color'] = s
-	source.data['legend_info'] = l
+	r.data_source.data['color'] = s
+	r.data_source.data['legend_info'] = l
 	
 	# source.patch({'color':[(slice(len(s)), s)],
 	# 			'legend_info':[(slice(len(l)), l)]})
 	try:
 		r.selection_glyph.fill_color = 'color'
-	except:
+	except Exception as e:
+		print (e)
 		pass
 	try:
 		r.nonselection_glyph.fill_color = 'color'
-	except:
+	except Exception as e:
+		print (e)
 		pass
 	
 	r.glyph.fill_color = 'color'
 	
 	embed_vis.legend.visible = True
 	bar.visible = False
+	return
 
 def cell_slider_update(attr, old ,new):
 	r.data_source.selected.indices = [new]
@@ -519,7 +527,7 @@ def update(attr, old, new):
 			# new = int(new)
 			if int(local_selection_slider.value) > 1:
 				v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-				distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
+				distance = np.nansum((v[new,None,:] - v[:, :])** 2, axis=-1)
 				new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 				
 			update_heatmap(new)
@@ -530,7 +538,7 @@ def update(attr, old, new):
 			update_heatmap(new)
 			if categorical_info.visible:
 				# categorical mode:
-				bar_info, count = np.unique(np.array(source.data['label_info'])[new], return_counts=True)
+				bar_info, count = np.unique(np.array(r.data_source.data['label_info'])[new], return_counts=True)
 				categorical_hh1.data_source.data = dict(x=bar_info,
 														top=count)
 				
@@ -540,7 +548,7 @@ def update(attr, old, new):
 				width = temp[1] - temp[0]
 				hedges_miss = temp - width / 2
 				hedges = np.array(list(hedges_miss) + [hedges_miss[-1] + width])
-				hhist1, _ = np.histogram(source.data['label_info'][new], bins=hedges)
+				hhist1, _ = np.histogram(r.data_source.data['label_info'][new], bins=hedges)
 				continuous_hh1.data_source.data = dict(x=(hedges[:-1] + hedges[1:]) / 2,
 													   top=hhist1)
 
@@ -548,7 +556,7 @@ def update(attr, old, new):
 		selected = [new]
 		if int(local_selection_slider.value) > 1:
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-			distance = np.sum((v[new,None,:] - v[:, :])** 2, axis=-1)
+			distance = np.nansum((v[new,None,:] - v[:, :])** 2, axis=-1)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 			
 			selected = list(new)
@@ -559,6 +567,7 @@ def update(attr, old, new):
 
 
 def float_color_update(s, vmin=None, vmax=None):
+	s[np.isnan(s)] = 0.0
 	hhist, hedges = np.histogram(s, bins=20)
 	hzeros = np.zeros(len(hedges) - 1)
 	hmax = max(hhist) * 1.1
@@ -582,30 +591,44 @@ def float_color_update(s, vmin=None, vmax=None):
 	continuous_info.x_range.end = hedges[-1] + width
 	
 	embed_vis.legend.visible = False
-	bar.visible = True
+	
 
 	
 	# source.patch({'color':[(slice(len(s)), s)],
 	#               'legend_info': [(slice(len(s)), s)],
 	#               'label_info': [(slice(len(s)), s)]})
-	source.data['color'] = s
-	source.data['legend_info'] = s
-	source.data['label_info'] = s
+	color_s = np.clip(s, a_min=np.quantile(s, 0.05) if vmin is None else vmin, a_max=np.quantile(s, 0.95) if vmax is None else vmax)
+	# print (color_s)
+	color_s = (color_s - color_s.min()) / (color_s.max()- color_s.min())
+	import matplotlib as mpl
+	pal2 = mpl.cm.get_cmap('RdBu_r')
+	color_s = pal2(color_s)
+	print(color_s)
+	color_s = np.array([mpl.colors.to_hex(css) for css in color_s])
+	print(color_s)
+	r.data_source.data['color'] = color_s
+	r.data_source.data['legend_info'] = s
+	r.data_source.data['label_info'] = s
 	
-	mapper = linear_cmap('color', palette=pal, low=np.quantile(s, 0.05) if vmin is None else vmin, high=np.quantile(s, 0.95) if vmax is None else vmax)
-	try:
-		r.selection_glyph.fill_color=mapper
-	except:
-		pass
-	try:
-		r.nonselection_glyph.fill_color=mapper
-	except:
-		pass
-	r.glyph.fill_color = mapper
+	# mapper = linear_cmap('color', palette=pal, low=np.quantile(s, 0.05) if vmin is None else vmin, high=np.quantile(s, 0.95) if vmax is None else vmax)
 	
-	bar.color_mapper.low = np.quantile(s, 0.05) if vmin is None else vmin
-	bar.color_mapper.high =np.quantile(s, 0.95) if vmax is None else vmax
 	
+	
+	# try:
+	# 	r.selection_glyph.fill_color=mapper
+	# except:
+	# 	pass
+	# try:
+	# 	r.nonselection_glyph.fill_color=mapper
+	# except:
+	# 	pass
+	r.glyph.fill_color = 'color'
+	
+	# bar.color_mapper.low = np.quantile(s, 0.05) if vmin is None else vmin
+	# bar.color_mapper.high =np.quantile(s, 0.95) if vmax is None else vmax
+	bar.update(color_mapper=LinearColorMapper( palette=pal, low=np.quantile(s, 0.05) if vmin is None else vmin, high=np.quantile(s, 0.95) if vmax is None else vmax))
+	bar.visible = True
+	return
 	
 def str_color_update(s, new):
 	categorical_info.visible=True
@@ -632,7 +655,7 @@ def str_color_update(s, new):
 			encoded_color = [Category10_10[xx] for xx in inv]
 		elif len(l) <= 50:
 			Category20_20_temp = np.array(Category20_20)
-			Category20_20_temp = list(Category20_20_temp) + list(Category20_20_temp)
+			Category20_20_temp = list(Category20_20_temp) + list(np.array(Spectral11)) + list(Category20_20_temp) + list(np.array(Spectral11))
 			# Category20_20_temp = list(Category20_20_temp[np.array([0,2,4,6,8,10,12,14,16,18])]) + list(Category20_20_temp[np.array([1,3,5,7,9,11,13,15,17,19])]) +   list(Category20b_20)
 			# shuffle(Category20_20_temp)
 			encoded_color = [Category20_20_temp[xx] for xx in inv]
@@ -644,7 +667,7 @@ def str_color_update(s, new):
 				encoded_color = [Category10_10[xx] for xx in inv]
 			elif len(l) <= 50:
 				Category20_20_temp = np.array(Category20_20)
-				Category20_20_temp = list(Category20_20_temp) + list(Category20_20_temp)
+				Category20_20_temp = list(Category20_20_temp) + list(Category20_20_temp) + list(Category20_20_temp)
 				# Category20_20_temp = list(Category20_20_temp[np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])]) + list(
 				# 	Category20_20_temp[np.array([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])])  +   list(Category20b_20)
 				# shuffle(Category20_20_temp)
@@ -661,15 +684,15 @@ def str_color_update(s, new):
 	# 	'color': [(slice(len(s)), encoded_color)]
 	# })
 	
-	source.data['label_info'] = s
-	source.data['legend_info'] = s
+	r.data_source.data['label_info'] = s
+	r.data_source.data['legend_info'] = s
 	if encoded_color is not None:
-		source.data['color'] = encoded_color
+		r.data_source.data['color'] = encoded_color
 		
 		embed_vis.legend.visible = True
 	else:
 		embed_vis.legend.visible = False
-	
+		
 	try:
 		r.selection_glyph.fill_color='color'
 	except:
@@ -686,6 +709,7 @@ def color_update(attr, old, new):
 	continuous_info.title.text = "%s histogram" % new
 	global origin_sparse
 	if new == "None":
+		print ("None color update")
 		s = ['cell'] * cell_num
 		str_color_update(s, "None")
 	elif new == "kde":
@@ -724,20 +748,35 @@ def color_update(attr, old, new):
 		
 		s = np.array(s)
 		float_color_update(s)
+	elif new == 'kmeans':
+		global config
+		temp_dir = config['temp_dir']
+		embedding_name = config['embedding_name']
+		# generate embedding vectors
+		temp_str = "_origin"
+		embed_dir = os.path.join(temp_dir, "embed")
+		embed = np.load(os.path.join(embed_dir, "%s_0%s.npy" % (embedding_name, temp_str)))
+		s = KMeans(n_clusters=4, n_init=200).fit_predict(embed)
+		s = ['cl_'+str(_) for _ in s]
+		str_color_update(s, new)
 	else:
 		s = np.array(color_scheme[new])
 		if s.dtype == 'int':
 			# categorical
+			print ("int")
 			s = s.astype("str")
 			str_color_update(s, new)
 		elif s.dtype == '|S3':
+			print("string")
 			s = np.asarray([sth.decode('utf8') for sth in s]).astype('str')
 			str_color_update(s, new)
 			
 		elif s.dtype == 'float':
 			# continuous
+			print ("float")
 			float_color_update(s)
 		else:
+			print ("as string")
 			s = s.astype('str')
 			str_color_update(s, new)
 
@@ -748,8 +787,8 @@ def data_update(attr, old, new):
 	embed_vis.title.text = "Loading... Please wait"
 	
 	r.data_source.selected.indices = []
-	color_selector.value = "None"
-	initialize(name2config[new], correct_color=True)
+	# color_selector.value = "None"
+	initialize(name2config[new], correct_color=True, to_none_color=True)
 	# print(config['impute_list'])
 	chrom_selector.options = config['impute_list']
 	chrom_selector.value = config['impute_list'][0]
@@ -788,7 +827,7 @@ def widget_update():
 	keys = list(color_scheme.keys())
 	if "cell_name_higashi" in keys:
 		keys.remove("cell_name_higashi")
-	color_selector.options = ["None"] + keys+ ["kde", "kde_ratio", "read_count", "cis_trans_ratio"]
+	color_selector.options = ["None"] + keys+ ["kde", "kde_ratio", "read_count", "cis_trans_ratio", 'kmeans']
 
 
 def mds(mat, n=2):
@@ -820,7 +859,7 @@ def mds(mat, n=2):
 	# co = np.real(v[:, :2].dot(np.sqrt(np.diag(w[:2]))))
 	return co
 
-async def calculate_and_update(v, neighbor_num, correct_color):
+async def calculate_and_update(v, neighbor_num, correct_color, to_none_color):
 	global neighbor_info, source, config, color_scheme
 	
 	
@@ -885,12 +924,23 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	# print (x, y)
 	data = dict(x=x, y=y, color=["#3c84b1"] * len(x), legend_info=['cell'] * len(x),
 				label_info=np.array(['cell'] * len(x)))
+	
 	if 'cell_name_higashi' in color_scheme:
 		data['cell_name'] = color_scheme['cell_name_higashi']
 	source.data = data
-	
+	# r.data_source
 	if correct_color:
-		color_update([], [], color_selector.value)
+		print ("correct color")
+		if to_none_color:
+			try:
+				color_selector.remove_on_change('value', color_update)
+			except:
+				pass
+			color_selector.value = "None"
+			color_selector.on_change('value', color_update)
+		else:
+			color_update([], [], color_selector.value)
+
 		widget_update()
 		update([], [], [])
 		r.data_source.selected.indices = []
@@ -898,7 +948,7 @@ async def calculate_and_update(v, neighbor_num, correct_color):
 	print ("finish init")
 	return
 
-def initialize(config_name, correct_color=False):
+def initialize(config_name, correct_color=False, to_none_color=False):
 	global config, color_scheme, v, cell_num, source, neighbor_info
 	config = get_config(config_name)
 	temp_dir = config['temp_dir']
@@ -935,7 +985,7 @@ def initialize(config_name, correct_color=False):
 		timestr = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
 		msg_list.append("%s - MDS computing, it takes time" % timestr)
 		format_message()
-	curdoc().add_next_tick_callback(partial(calculate_and_update, v, neighbor_num, correct_color))
+	curdoc().add_next_tick_callback(partial(calculate_and_update, v, neighbor_num, correct_color, to_none_color))
 
 	
 	
@@ -956,6 +1006,11 @@ def Kmean_ARI(button):
 	# uniques = uniques[counts >= 40]
 	pred = KMeans(n_clusters=len(uniques), n_init = 200).fit(v).labels_
 	ari1 = adjusted_rand_score(target2int, pred)
+	
+	# for i in [len(uniques)-1, len(uniques), len(uniques)+1]:
+	# 	pred = KMeans(n_clusters=i, n_init=200).fit(v).labels_
+	# 	print (adjusted_rand_score(target2int, pred))
+	
 
 	pred = AgglomerativeClustering(n_clusters=len(uniques)).fit(v).labels_
 	ari3 = adjusted_rand_score(target2int, pred)
@@ -1008,7 +1063,7 @@ def anything_that_updates_heatmap(attr, old, new):
 		new = r.data_source.selected.indices
 		if int(local_selection_slider.value) > 1:
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
+			distance = np.nansum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 			update_heatmap(new)
 			return
@@ -1020,7 +1075,7 @@ def anything_that_updates_heatmap_button(button):
 		new = r.data_source.selected.indices
 		if int(local_selection_slider.value) > 1:
 			v = np.stack([r.data_source.data["x"], r.data_source.data["y"]], axis=-1)
-			distance = np.sum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
+			distance = np.nansum((v[new, None, :] - v[:, :]) ** 2, axis=-1)
 			new = np.argsort(distance).reshape((-1))[:local_selection_slider.value].astype('int')
 			update_heatmap(new)
 			return
@@ -1056,7 +1111,7 @@ def chrom_update(attr, old, new):
 	matrix_end_slider_y.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.value = origin_sparse[0].shape[-1]
 	plot_distance_selector.end = origin_sparse[0].shape[-1]
-	color_update([], [], color_selector.value)
+	# color_update([], [], color_selector.value)
 	update_heatmap(r.data_source.selected.indices)
 	
 
@@ -1064,7 +1119,15 @@ def chrom_update(attr, old, new):
 
 global config, color_scheme, v, cell_num, source, neighbor_info, mask, origin_sparse, render_cache
 
-vis_config = get_config("../config_dir/visual_config.JSON")
+import argparse
+def parse_args():
+	parser = argparse.ArgumentParser(description="Higashi vis program")
+	parser.add_argument('-c', '--config', type=str, default="../config_dir/visual_config.JSON")
+	
+	return parser.parse_args()
+args = parse_args()
+
+vis_config = get_config(args.config)
 config_dir = vis_config['config_list']
 avail_data = []
 for c in config_dir:
@@ -1134,7 +1197,7 @@ size_selector = Slider(title='scatter size', value=4, start=1, end=20,step=1, wi
 data_selector = Select(title='scHi-C dataset', value=avail_data[0], options=avail_data, width=150)
 
 
-chrom_selector = Select(title='chromosome selector', value="chr1", options=config['chrom_list'], width=150)
+chrom_selector = Select(title='chromosome selector', value=config['chrom_list'][0], options=config['chrom_list'], width=150)
 cmap_options = ["Reds", "RdBu_r", "viridis"]
 if cmocean_flag:
 	cmap_options += ["cmo.curl"]
@@ -1158,8 +1221,9 @@ minus_button.on_click(minus_cell)
 plus_button.on_click(plus_cell)
 
 temp_dir = config['temp_dir']
+impute_list = config['impute_list']
 raw_dir = os.path.join(temp_dir, "raw")
-origin_sparse = np.load(os.path.join(raw_dir, "chr1_sparse_adj.npy"), allow_pickle=True)
+origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % impute_list[0]), allow_pickle=True)
 
 
 plot_distance_selector = Slider(title='Heatmap distance', value=origin_sparse[0].shape[-1], start=1, end=origin_sparse[0].shape[-1], step=1, width=150, value_throttled=2000)
@@ -1228,7 +1292,7 @@ vmin_vmax_slider = Slider(title='Vmin/Vmax(% of range)', value=0.95, start=0.0,e
 
 
 
-info_log = Div(text="", width = 300, height = 300, height_policy="fixed",
+info_log = Div(text="", width = 1200, height = 300, height_policy="fixed",
 				   style={'overflow-y':'scroll',
 						  'height':'300px',
 						  'width':'1200px',

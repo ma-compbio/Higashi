@@ -73,8 +73,10 @@ def create_mask(k=30, chrom="chr1", origin_sparse=None):
 
 
 def process_one_chrom(chrom):
+	# Get the raw sparse mtx list
 	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 	size = origin_sparse[0].shape[0]
+	# find centromere & gaps...
 	mask, split_point = create_mask((int(1e5)), chrom, origin_sparse)
 	
 	bulk1 = np.array(np.sum(origin_sparse, axis=0).todense())
@@ -187,7 +189,7 @@ def process_one_chrom(chrom):
 			temp_slice = temp_slice[:, slice_start:slice_end]
 			temp_select = temp_slice[use_rows_list[j], :]
 			temp_select = temp_select[:, use_rows_list[j]]
-			temp_select = rankmatch(temp_select, bulk_slice_list[j])
+			# temp_select = rankmatch(temp_select, bulk_slice_list[j])
 			temp_compartment = compartment(temp_select, False, bulk_model_list[j], None)
 			if bulk_reverse_list[j]:
 				temp_compartment = -1 * temp_compartment
