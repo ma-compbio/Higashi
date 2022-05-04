@@ -114,40 +114,39 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 	y_list, w_list, pred_list = [], [], []
 	
 	bar = trange(batch_num * collect_num, desc=' - (Training) ', leave=False, )
-	
-	
-	while len(train_p_list) < batch_num:
-		edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
-		train_p_list.append(train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
-		                          chroms_in_batch))
 	finish_count = 0
-	for p in as_completed(train_p_list):
-		batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.result()
+	
+	def ps1(batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch):
 		batch_edge_big = np2tensor_hyper(batch_edge_big, dtype=torch.long)
 		batch_y_big, batch_edge_weight_big = torch.from_numpy(batch_y_big), torch.from_numpy(batch_edge_weight_big)
 		
-		batch_edge_big, batch_y_big, batch_edge_weight_big = batch_edge_big.to(device, non_blocking=True), batch_y_big.to(
+		batch_edge_big, batch_y_big, batch_edge_weight_big = batch_edge_big.to(device,
+		                                                                       non_blocking=True), batch_y_big.to(
 			device, non_blocking=True), batch_edge_weight_big.to(device, non_blocking=True)
 		size = int(len(batch_edge_big) / collect_num)
 		for j in range(collect_num):
-			batch_edge, batch_edge_weight, batch_y, batch_chrom, batch_to_neighs = batch_edge_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
-													 batch_edge_weight_big[
-													 j * size: min((j + 1) * size, len(batch_edge_big))], \
-													 batch_y_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
-													 batch_chrom_big[j * size: min((j + 1) * size, len(batch_edge_big))], \
-													batch_to_neighs_big[j]
-
+			batch_edge, batch_edge_weight, batch_y, batch_chrom, batch_to_neighs = batch_edge_big[
+			                                                                       j * size: min((j + 1) * size,
+			                                                                                     len(batch_edge_big))], \
+			                                                                       batch_edge_weight_big[
+			                                                                       j * size: min((j + 1) * size,
+			                                                                                     len(batch_edge_big))], \
+			                                                                       batch_y_big[
+			                                                                       j * size: min((j + 1) * size,
+			                                                                                     len(batch_edge_big))], \
+			                                                                       batch_chrom_big[
+			                                                                       j * size: min((j + 1) * size,
+			                                                                                     len(batch_edge_big))], \
+			                                                                       batch_to_neighs_big[j]
+			
 			pred, loss_bce, loss_mse = forward_batch_hyperedge(model, loss_func, batch_edge,
-																batch_edge_weight, batch_chrom,
-                                                               batch_to_neighs, y=batch_y, chroms_in_batch=chroms_in_batch)
-
-
-
+			                                                   batch_edge_weight, batch_chrom,
+			                                                   batch_to_neighs, y=batch_y,
+			                                                   chroms_in_batch=chroms_in_batch)
+			
 			y_list.append(batch_y.detach().cpu())
 			w_list.append(batch_edge_weight.detach().cpu())
 			pred_list.append(pred.detach().cpu())
-
-			final_batch_num += 1
 			
 			if use_recon:
 				for opt in optimizer_list:
@@ -157,58 +156,88 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 					main_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
 				except:
 					main_norm = 0.0
-
+				
 				for opt in optimizer_list:
 					opt.zero_grad(set_to_none=True)
 				loss_mse.backward(retain_graph=True)
-
+				
 				recon_norm = node_embedding_init.wstack[0].weight_list[0].grad.data.norm(2)
 				ratio = beta * main_norm / recon_norm
 				ratio1 = max(ratio, 100 * median_total_sparsity_cell - 3)
-
+				
 				if contractive_flag:
 					contractive_loss = 0.0
 					for i in range(len(node_embedding_init.wstack[0].weight_list)):
 						contractive_loss += torch.sum(node_embedding_init.wstack[0].weight_list[i] ** 2)
 						contractive_loss += torch.sum(node_embedding_init.wstack[0].reverse_weight_list[i] ** 2)
-
+				
 				else:
 					contractive_loss = 0.0
-
+			
 			else:
 				contractive_loss = 0.0
 				ratio = 0.0
 				ratio1 = 0.0
-
+			
 			train_loss = alpha * loss_bce + ratio1 * loss_mse + contractive_loss_weight * contractive_loss
 			for opt in optimizer_list:
 				opt.zero_grad(set_to_none=True)
 			# backward
 			train_loss.backward()
-
+			
 			# update parameters
 			for opt in optimizer_list:
 				opt.step()
-
+			
 			bar.update(n=1)
-			bar.set_description(" - (Training) BCE:  %.3f MSE: %.3f Loss: %.3f norm_ratio: %.2f"  %
-								(loss_bce.item(), loss_mse.item(),  train_loss.item(), ratio1),
-								refresh=False)
-			
-			bce_total_loss += loss_bce.item()
-			mse_total_loss += loss_mse.item()
-			
-		train_p_list.remove(p)
+			bar.set_description(" - (Training) BCE:  %.3f MSE: %.3f Loss: %.3f norm_ratio: %.2f" %
+			                    (loss_bce.item(), loss_mse.item(), train_loss.item(), ratio1),
+			                    refresh=False)
 		
+		if train_p_list is not None:
+			train_p_list.remove(p)
+			
+			while len(train_p_list) < batch_num:
+				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
+				train_p_list.append(
+					train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
+					                  chroms_in_batch))
+		
+		return loss_bce.item(), loss_mse.item()
+	
+	
+	
+	if train_p_list is not None:
 		while len(train_p_list) < batch_num:
 			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
-			train_p_list.append(
-				train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
-				                  chroms_in_batch))
+			train_p_list.append(train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
+			                          chroms_in_batch))
+		for p in as_completed(train_p_list):
+			batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.result()
+			loss_bce, loss_mse = ps1(batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch)
+			bce_total_loss += loss_bce
+			mse_total_loss += loss_mse
+			final_batch_num += 1
+			finish_count += 1
+			if finish_count == batch_num:
+				break
+	else:
+		for i in range(batch_num):
+			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
+			batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, \
+			batch_to_neighs_big, chroms_in_batch = one_thread_generate_neg(edges_part, edges_chrom, edge_weight_part, collect_num, True,
+			                          chroms_in_batch)
+			loss_bce, loss_mse = ps1(batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big,
+			                         batch_to_neighs_big, chroms_in_batch)
+			bce_total_loss += loss_bce
+			mse_total_loss += loss_mse
+			final_batch_num += 1
+			finish_count += 1
+			if finish_count == batch_num:
+				break
 			
-		finish_count += 1
-		if finish_count == batch_num:
-			break
+
+	
 	
 	y = torch.cat(y_list)
 	w = torch.cat(w_list)
@@ -632,10 +661,12 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 		save_embeddings(model)
 	
 	eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
-	
-	
-	train_pool = ProcessPoolExecutor(max_workers=cpu_num)
-	train_p_list = []
+	if cpu_num > 1:
+		train_pool = ProcessPoolExecutor(max_workers=cpu_num)
+		train_p_list = []
+	else:
+		print ("no parallel")
+		train_pool, train_p_list = None, None
 	
 	for epoch_i in range(epochs):
 		if save_embed:
