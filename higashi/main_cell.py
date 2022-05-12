@@ -956,8 +956,11 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = get_config(args.config)
 	cpu_num = config['cpu_num']
+	cpu_num_torch = config['cpu_num_torch']
 	if cpu_num < 0:
 		cpu_num = int(mp.cpu_count())
+	if cpu_num_torch < 0:
+		cpu_num_torch = int(mp.cpu_count())
 	print("cpu_num", cpu_num)
 	gpu_num = config['gpu_num']
 	print("gpu_num", gpu_num)
@@ -967,7 +970,7 @@ if __name__ == '__main__':
 		current_device = get_free_gpu()
 	else:
 		current_device = 'cpu'
-		torch.set_num_threads(cpu_num)
+		torch.set_num_threads(cpu_num_torch)
 		
 	global pair_ratio
 	
