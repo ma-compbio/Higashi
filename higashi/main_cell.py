@@ -956,11 +956,16 @@ if __name__ == '__main__':
 	args = parse_args()
 	config = get_config(args.config)
 	cpu_num = config['cpu_num']
-	cpu_num_torch = config['cpu_num_torch']
+	
 	if cpu_num < 0:
 		cpu_num = int(mp.cpu_count())
-	if cpu_num_torch < 0:
-		cpu_num_torch = int(mp.cpu_count())
+		
+	if 'cpu_num_torch' in config:
+		cpu_num_torch = config['cpu_num_torch']
+		if cpu_num_torch < 0:
+			cpu_num_torch = int(mp.cpu_count())
+	else:
+		cpu_num_torch = cpu_num
 	print("cpu_num", cpu_num)
 	gpu_num = config['gpu_num']
 	print("gpu_num", gpu_num)

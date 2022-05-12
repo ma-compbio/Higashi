@@ -1,10 +1,19 @@
 import multiprocessing as mp
 import warnings
 import torch.optim
-from .Higashi_backend.Modules import *
-from .Higashi_backend.Functions import *
-from .Higashi_backend.utils import *
-from .Impute import impute_process
+try:
+	from .Higashi_backend.Modules import *
+	from .Higashi_backend.Functions import *
+	from .Higashi_backend.utils import *
+	from .Impute import impute_process
+except:
+	try:
+		from Higashi_backend.Modules import *
+		from Higashi_backend.Functions import *
+		from Higashi_backend.utils import *
+		from Impute import impute_process
+	except:
+		raise EOFError
 import argparse
 import resource
 from scipy.sparse import csr_matrix
@@ -71,7 +80,7 @@ def check_nonzero(x, c):
 		indptr, nbrs, nbr_value = get_csr_submatrix(
 			M, N, mtx.indptr, mtx.indices, mtx.data, row_start, row_end, col_start, col_end)
 	except:
-		print(M, N, row_start, row_end, col_start, col_end, mem_efficient_flag)
+		print(M, N, num_list[c], x[1], row_start, row_end, x[2], col_start, col_end, mem_efficient_flag)
 	a = len(nbr_value) > 0
 	
 	return a
@@ -399,8 +408,6 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight,
 
 
 
-
-
 def mp_impute(config_path, path, name, mode, cell_start, cell_end, sparse_path, weighted_info=None, gpu_id=None):
 	import os
 	path1 = os.path.abspath(__file__)
@@ -428,8 +435,11 @@ class Higashi():
 		super().__init__()
 		self.config_path = config_path
 		self.config = get_config(config_path)
-		
-		from .Process import create_dir
+		try:
+			from .Process import create_dir
+		except:
+			from Process import create_dir
+			
 		create_dir(self.config)
 		warnings.filterwarnings("ignore")
 		rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -471,11 +481,18 @@ class Higashi():
 			self.cpu_num = int(mp.cpu_count())
 		self.gpu_num = config['gpu_num']
 		
+		if 'cpu_num_torch' in config:
+			self.cpu_num_torch = config['cpu_num_torch']
+			if self.cpu_num_torch < 0:
+				self.cpu_num_torch = int(mp.cpu_count())
+		else:
+			self.cpu_num_torch = self.cpu_num
+			
 		if torch.cuda.is_available():
 			self.current_device = get_free_gpu()
 		else:
 			self.current_device = 'cpu'
-			torch.set_num_threads(self.cpu_num)
+			torch.set_num_threads(self.cpu_num_torch)
 		
 		self.data_dir = config['data_dir']
 		self.temp_dir = config['temp_dir']
@@ -665,8 +682,8 @@ class Higashi():
 			
 		
 		# automatically set batch size based on the resolution and number of cells
-		self.batch_size = int(256 * max((1000000 / self.res), 1) * max(self.num[0] / 6000, 1))
-		
+		self.batch_size = min(int(256 * max((1000000 / self.res), 1) * max(self.num[0] / 6000, 1)), 1280)
+		print ("batch_size", self.batch_size)
 		num_list = np.cumsum(self.num)
 		self.num_list = num_list
 		max_bin = int(np.max(self.num[1:]))
@@ -1310,8 +1327,12 @@ class Higashi():
 	
 	
 	def train_for_imputation_nbr_0(self):
+		self.train_for_imputation_no_nbr()
+	
+	def train_for_imputation_no_nbr(self):
 		global steps, pair_ratio
 		# Loading Stage 1
+		del self.higashi_model, self.node_embedding_init
 		self.higashi_model = torch.load(self.save_path + "_stage1_model", map_location=self.current_device)
 		self.node_embedding_init = self.higashi_model.encode1.static_nn
 		self.save_embeddings()
@@ -1380,6 +1401,7 @@ class Higashi():
 		
 	def impute_no_nbr(self):
 		# 	# Loading Stage 2
+		del self.higashi_model
 		self.higashi_model = torch.load(self.save_path + "_stage2_model", map_location=self.current_device)
 		self.node_embedding_init = self.higashi_model.encode1.static_nn
 		if self.non_para_impute:
@@ -1408,6 +1430,7 @@ class Higashi():
 			         None)
 
 	def train_for_imputation_with_nbr(self):
+		del self.higashi_model
 		global cell_neighbor_list, cell_neighbor_weight_list, steps, weight_dict, pair_ratio, sparse_chrom_list_GCN, weighted_adj
 		self.higashi_model = torch.load(self.save_path + "_stage2_model", map_location=self.current_device)
 		self.node_embedding_init = self.higashi_model.encode1.static_nn
@@ -1495,6 +1518,7 @@ class Higashi():
 	
 	
 	def impute_with_nbr(self):
+		del self.higashi_model
 		# Loading Stage 3
 		self.higashi_model = torch.load(self.save_path + "_stage3_model", map_location=self.current_device)
 		self.node_embedding_init = self.higashi_model.encode1.static_nn
@@ -1569,18 +1593,12 @@ class Higashi():
 if __name__ == '__main__':
 	# Get parameters from config file
 	args = parse_args()
-	# higashi = Higashi(args.config)
-	# higashi.prep_model()
-	# higashi.train_for_embeddings()
-	# higashi.train_for_imputation_nbr_0()
-	# higashi.impute_no_nbr()
-	# higashi.train_for_imputation_with_nbr()
-	# higashi.impute_with_nbr()
-	# if impute_no_nbr_flag or impute_with_nbr_flag:
-	#
-	# if impute_no_nbr_flag:
-	# 	impute..
-	#
-	# if impute_with_nbr_flag:
-	# 	train
+	higashi = Higashi(args.config)
+	higashi.process_data()
+	higashi.prep_model()
+	higashi.train_for_embeddings()
+	higashi.train_for_imputation_nbr_0()
+	higashi.impute_no_nbr()
+	higashi.train_for_imputation_with_nbr()
+	higashi.impute_with_nbr()
 		
