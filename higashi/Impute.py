@@ -30,7 +30,7 @@ def skip_start_end(config, chrom="chr1"):
 	res = config['resolution']
 	if 'cytoband_path' in config:
 		cytoband_path = config['cytoband_path']
-		gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None)
+		gap_tab = pd.read_table(config["cytoband_path"], sep="\t", header=None, comment='#')
 		gap_tab.columns = ['chrom', 'start', 'end', 'sth', 'type']
 		gap_list = gap_tab[(gap_tab["chrom"] == chrom) & (gap_tab["type"] == "acen")]
 		start = np.floor((np.array(gap_list['start']) - 100000) / res).astype('int')
@@ -294,8 +294,8 @@ def impute_process(config_path, model, name, mode, cell_start, cell_end, sparse_
 	torch.cuda.empty_cache()
 	for s in embedding_init.embeddings:
 		s.embedding = s.embedding.to(device)
-	for t in embedding_init.targets:
-		t.embedding = t.embedding.to(device)
+	# for t in embedding_init.targets:
+	# 	t.embedding = t.embedding.to(device)
 	embedding_init.wstack = embedding_init.wstack.to(device)
 	for chrom in chrom2info:
 		slice_start, slice_end, f = chrom2info[chrom]
