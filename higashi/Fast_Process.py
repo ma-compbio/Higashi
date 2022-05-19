@@ -109,6 +109,12 @@ def data2mtx(config, file, chrom_start_end, verbose, cell_id):
 		tab.columns = config['contact_header']
 	if 'count' not in tab.columns:
 		tab['count'] = 1
+	
+	if 'downsample' in config:
+		downsample = config['downsample']
+	else:
+		downsample = 1.0
+		
 	data = tab
 	# fetch info from config
 	res = config['resolution']
@@ -124,6 +130,14 @@ def data2mtx(config, file, chrom_start_end, verbose, cell_id):
 	chrom1, chrom2 = np.array(data['chrom1'].values), np.array(data['chrom2'].values)
 	count = np.array(data['count'].values)
 	
+	if downsample < 1:
+		# print ("downsample at", downsample)
+		index = np.random.permutation(len(data))[:int(downsample * len(data))]
+		count = count[index]
+		chrom1 = chrom1[index]
+		bin1 = bin1[index]
+		bin2 = bin2[index]
+		
 	del data
 	
 	m1_list = []
