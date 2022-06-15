@@ -249,7 +249,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 		y.view(-1), pred.view(-1)), auc1, auc2, str1, str2, train_pool, train_p_list
 
 
-def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
+def eval_epoch(model, loss_func, validation_data_generator, p_list=None, eval_pool=None):
 	"""Epoch operation in evaluation phase"""
 	bce_total_loss = 0
 	model.eval()
@@ -257,35 +257,61 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None):
 		y_list, w_list, pred_list = [], [], []
 		
 		bar = tqdm(range(update_num_per_eval_epoch), desc='  - (Validation)   ', leave=False)
-		if p_list is None:
-			pool = ProcessPoolExecutor(max_workers=cpu_num)
-			p_list = []
-
+		if p_list is None and eval_pool is None:
 			for i in range(update_num_per_eval_epoch):
 				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
-				p_list.append(
-					pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
-
-		for p in as_completed(p_list):
-			batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs, chroms_in_batch = p.result()
-			batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
-			batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
-			batch_x, batch_y, batch_w = batch_x.to(device, non_blocking=True), batch_y.to(device, non_blocking=True), batch_w.to(device, non_blocking=True)
+				batch_x, batch_y, batch_w, batch_chrom, \
+				batch_to_neighs, chroms_in_batch = one_thread_generate_neg(edges_part, edges_chrom,
+				                                                           edge_weight_part, 1,
+				                                                           False, chroms_in_batch)
+				batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
+				batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
+				batch_x, batch_y, batch_w = batch_x.to(device, non_blocking=True), batch_y.to(device,
+				                                                                              non_blocking=True), batch_w.to(
+					device, non_blocking=True)
+				
+				pred_batch, eval_loss, eval_mse = forward_batch_hyperedge(model, loss_func, batch_x, batch_w,
+				                                                          batch_chrom, batch_to_neighs[0], y=batch_y,
+				                                                          chroms_in_batch=chroms_in_batch)
+				
+				bce_total_loss += eval_loss.item()
+				
+				y_list.append(batch_y.detach().cpu())
+				w_list.append(batch_w.detach().cpu())
+				pred_list.append(pred_batch.detach().cpu())
+				
+				bar.update(n=1)
+				bar.set_description(" - (Validation) BCE:  %.3f MSE: %.3f " %
+				                    (eval_loss.item(), eval_mse.item()),
+				                    refresh=False)
+		else:
+			if p_list is None:
+				p_list = []
+				for i in range(update_num_per_eval_epoch):
+					edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
+					p_list.append(
+						eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
 			
-			pred_batch, eval_loss, eval_mse = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, batch_chrom, batch_to_neighs[0], y=batch_y, chroms_in_batch=chroms_in_batch)
-			
-			
-			bce_total_loss += eval_loss.item()
-			
-			y_list.append(batch_y.detach().cpu())
-			w_list.append(batch_w.detach().cpu())
-			pred_list.append(pred_batch.detach().cpu())
-			
-			
-			bar.update(n=1)
-			bar.set_description(" - (Validation) BCE:  %.3f MSE: %.3f " %
-								(eval_loss.item(), eval_mse.item()),
-								refresh=False)
+			for p in as_completed(p_list):
+				batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs, chroms_in_batch = p.result()
+				batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
+				batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
+				batch_x, batch_y, batch_w = batch_x.to(device, non_blocking=True), batch_y.to(device, non_blocking=True), batch_w.to(device, non_blocking=True)
+				
+				pred_batch, eval_loss, eval_mse = forward_batch_hyperedge(model, loss_func, batch_x, batch_w, batch_chrom, batch_to_neighs[0], y=batch_y, chroms_in_batch=chroms_in_batch)
+				
+				
+				bce_total_loss += eval_loss.item()
+				
+				y_list.append(batch_y.detach().cpu())
+				w_list.append(batch_w.detach().cpu())
+				pred_list.append(pred_batch.detach().cpu())
+				
+				
+				bar.update(n=1)
+				bar.set_description(" - (Validation) BCE:  %.3f MSE: %.3f " %
+									(eval_loss.item(), eval_mse.item()),
+									refresh=False)
 			
 		bar.close()
 		
@@ -660,24 +686,29 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 	if save_embed:
 		save_embeddings(model)
 	
-	eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
+	
 	if cpu_num > 1:
 		train_pool = ProcessPoolExecutor(max_workers=cpu_num)
+		eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
 		train_p_list = []
 	else:
 		print ("no parallel")
 		train_pool, train_p_list = None, None
+		eval_pool = None
 	
 	for epoch_i in range(epochs):
 		if save_embed:
 			save_embeddings(model)
 		
 		print('[ Epoch', epoch_i, 'of', epochs, ']')
-		eval_p_list = []
-		for i in range(update_num_per_eval_epoch):
-			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
-			eval_p_list.append(
-				eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
+		if eval_pool is not None:
+			eval_p_list = []
+			for i in range(update_num_per_eval_epoch):
+				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
+				eval_p_list.append(
+					eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
+		else:
+			eval_p_list = None
 		
 		start = time.time()
 		
@@ -699,7 +730,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			
 		start = time.time()
 		valid_bce_loss, valid_accu, valid_auc1, valid_auc2, str1, str2 = eval_epoch(
-			model, loss, validation_data_generator, eval_p_list)
+			model, loss, validation_data_generator, eval_p_list, eval_pool)
 		print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
 			  '  acc: {accu:3.3f} %,'
 			  '{str1}: {auc1:3.3f}, {str2}: {auc2:3.3f},'
@@ -745,7 +776,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 
 	start = time.time()
 	
-	valid_bce_loss, valid_accu, valid_auc1, valid_auc2, _, _ = eval_epoch(model, loss, validation_data_generator)
+	valid_bce_loss, valid_accu, valid_auc1, valid_auc2, _, _ = eval_epoch(model, loss, validation_data_generator, None, eval_pool)
 	print('  - (Validation-hyper) bce: {bce_loss: 7.4f},'
 		  '  acc: {accu:3.3f} %,'
 		  ' auc: {auc1:3.3f}, aupr: {auc2:3.3f},'
