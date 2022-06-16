@@ -212,6 +212,7 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
 			train_p_list.append(train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
 			                          chroms_in_batch))
+		print ("waiting for train_p_list results")
 		for p in as_completed(train_p_list):
 			batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.result()
 			loss_bce, loss_mse = ps1(batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch)
@@ -541,15 +542,12 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 		
 		for i, (c, cell_id, bin_id, remove_bin_id) in enumerate(zip(nodes_chrom, cell_ids, bin_ids, remove_bin_ids.reshape((-1)))):
 			if precompute_weighted_nbr:
-				print ("precompute_mode")
 				mtx = sparse_chrom_list_GCN[c][cell_id - 1]
-				print ("got the mtx")
 				row = bin_id - 1 - num_list[c]
 				M, N = mtx.shape
 				indptr, nbrs, nbr_value = get_csr_submatrix(
 					M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
 			else:
-				print("non_precompute_mode")
 				if weighted_adj:
 					# row = 0
 					# for nbr_cell in cell_neighbor_list[cell_id]:
@@ -582,7 +580,6 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 					indptr, nbrs, nbr_value = get_csr_submatrix(
 						M, N, mtx.indptr, mtx.indices, mtx.data, row, row + 1, 0, N)
 					
-			print ("at least, I got the indptr, nbrs, nbr_value")
 			if training and (remove_or_not[i] >= 0.6):
 				if len(nbrs) > 1:
 					mask = nbrs != (remove_bin_id - 1 - num_list[c])
@@ -591,7 +588,6 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 			
 			nbr_value = np.log1p(nbr_value)
 			nbrs = nbrs.reshape((-1)) + 1 + num_list[c]
-			print ("nbr_value transformed")
 			if type(nbrs) is not np.ndarray:
 				print (row, nbrs)
 			if len(nbrs) > 0:
@@ -604,7 +600,6 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 		to_neighs.append([])
 		to_neighs = np.array(to_neighs)[:-1]
 		to_neighs = np.array(to_neighs, dtype='object').reshape((len(x), 2))
-		print ("to_neighs formed")
 		size = int(len(x) / collect_num)
 		to_neighs_new = []
 		
@@ -615,9 +610,7 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 			                   w[index], \
 			                   x_chrom[index], \
 							   remove_bin_ids[index]
-			print ("shuffled")
 			to_neighs = [to_neighs_to_mask(to_neighs[index])]
-			print ("to_neighs_to_mask finish")
 		else:
 
 			for j in range(collect_num):
@@ -676,7 +669,8 @@ def one_thread_generate_neg(edges_part, edges_chrom, edge_weight, collect_num=1,
 			y = np.concatenate(new_y, axis=0)
 			w = np.concatenate(new_w, axis=0)
 			x_chrom = np.concatenate(new_x_chrom, axis=0)
-	return x, y, w, x_chrom, to_neighs, chroms_in_batch
+	print("finish process")
+	return x, y, w, x_chrom, [[] for i in range(collect_num)], chroms_in_batch
 
 
 def train(model, loss, training_data_generator, validation_data_generator, optimizer, epochs, load_first, save_embed=False, save_name=""):
