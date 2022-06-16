@@ -321,7 +321,7 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None, eval_po
 		
 		auc1, auc2, str1, str2 = roc_auc_cuda(w, pred)
 		
-	return bce_total_loss / (len(p_list)), accuracy(y.view(-1), pred.view(-1)), auc1, auc2, str1, str2
+	return bce_total_loss / (update_num_per_eval_epoch), accuracy(y.view(-1), pred.view(-1)), auc1, auc2, str1, str2
 
 
 def check_nonzero(x, c):
