@@ -194,15 +194,6 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 			                    (loss_bce.item(), loss_mse.item(), train_loss.item(), ratio1),
 			                    refresh=False)
 		
-		if train_p_list is not None:
-			train_p_list.remove(p)
-			
-			while len(train_p_list) < batch_num:
-				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
-				train_p_list.append(
-					train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
-					                  chroms_in_batch))
-		
 		return loss_bce.item(), loss_mse.item()
 	
 	
@@ -210,10 +201,10 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 	if train_p_list is not None:
 		while len(train_p_list) < batch_num:
 			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
-			train_p_list.append(train_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, collect_num, True,
-			                          chroms_in_batch))
-		for p in as_completed(train_p_list):
-			batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.result()
+			train_p_list.append(train_pool.apply_async(one_thread_generate_neg, [edges_part, edges_chrom, edge_weight_part, collect_num, True,
+			                          chroms_in_batch]))
+		for p in train_p_list:
+			batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch = p.get()
 			loss_bce, loss_mse = ps1(batch_edge_big, batch_y_big, batch_edge_weight_big, batch_chrom_big, batch_to_neighs_big, chroms_in_batch)
 			bce_total_loss += loss_bce
 			mse_total_loss += loss_mse
@@ -221,6 +212,9 @@ def train_epoch(model, loss_func, training_data_generator, optimizer_list, train
 			finish_count += 1
 			if finish_count == batch_num:
 				break
+			
+			train_p_list.remove(p)
+			
 	else:
 		for i in range(batch_num):
 			edges_part, edges_chrom, edge_weight_part, chroms_in_batch = training_data_generator.next_iter()
@@ -292,8 +286,8 @@ def eval_epoch(model, loss_func, validation_data_generator, p_list=None, eval_po
 					p_list.append(
 						eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
 			
-			for p in as_completed(p_list):
-				batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs, chroms_in_batch = p.result()
+			for p in p_list:
+				batch_x, batch_y, batch_w, batch_chrom, batch_to_neighs, chroms_in_batch = p.get()
 				batch_x = np2tensor_hyper(batch_x, dtype=torch.long)
 				batch_y, batch_w = torch.from_numpy(batch_y), torch.from_numpy(batch_w)
 				batch_x, batch_y, batch_w = batch_x.to(device, non_blocking=True), batch_y.to(device, non_blocking=True), batch_w.to(device, non_blocking=True)
@@ -685,8 +679,8 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 	
 	
 	if cpu_num > 1:
-		train_pool = ProcessPoolExecutor(max_workers=cpu_num)
-		eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
+		train_pool = mp.Pool(cpu_num)
+		eval_pool = mp.Pool(cpu_num)
 		train_p_list = []
 	else:
 		print ("no parallel")
@@ -703,7 +697,7 @@ def train(model, loss, training_data_generator, validation_data_generator, optim
 			for i in range(update_num_per_eval_epoch):
 				edges_part, edges_chrom, edge_weight_part, chroms_in_batch = validation_data_generator.next_iter()
 				eval_p_list.append(
-					eval_pool.submit(one_thread_generate_neg, edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch))
+					eval_pool.apply_async(one_thread_generate_neg, [edges_part, edges_chrom, edge_weight_part, 1, False, chroms_in_batch]))
 		else:
 			eval_p_list = None
 		
