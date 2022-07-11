@@ -62,11 +62,14 @@ if __name__ == '__main__':
 	config = get_config(config)
 	
 	temp_dir = config['temp_dir']
+	chrom_list = config['chrom_list']
 	
 	get_free_gpu()
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	
-	hic = np.array(np.load(os.path.join(temp_dir, "%s_cell_feats.npy" % chrom), allow_pickle=True))
+	with h5py.File(os.path.join(temp_dir, "node_feats.hdf5"), "r") as save_file:
+		hic = np.array(save_file["cell"]["%d" % chrom_list.index(chrom)])
+		
 	square_size = int(math.sqrt(hic.shape[-1]))
 	dim = square_size * 2
 	# hic = StandardScaler().fit_transform(hic)
@@ -79,7 +82,7 @@ if __name__ == '__main__':
 	
 	hic = torch.from_numpy(hic).to(device).float()
 
-	coassay = np.load(os.path.join(temp_dir, "coassay_%s.npy" % chrom), allow_pickle=True)
+	coassay = np.load(os.path.join(temp_dir, "temp", "coassay_%s.npy" % chrom), allow_pickle=True)
 	
 	print("chrom", chrom, hic.shape, coassay.shape)
 	cell_attributes = torch.from_numpy(coassay).to(device).float()
@@ -126,5 +129,5 @@ if __name__ == '__main__':
 	print(chrom, "finish", loss.item())
 	adj = hic[cell_ids]
 	embed, recon_ = model(adj, return_recon=True)
-	np.save(os.path.join(temp_dir, "pretrain_coassay_%s.npy" % chrom), embed.detach().cpu().numpy())
-	np.save(os.path.join(temp_dir, "pretrain_coassay_recon_%s.npy" % chrom), recon_.detach().cpu().numpy())
+	np.save(os.path.join(temp_dir, "temp", "pretrain_coassay_%s.npy" % chrom), embed.detach().cpu().numpy())
+	np.save(os.path.join(temp_dir, "temp", "pretrain_coassay_recon_%s.npy" % chrom), recon_.detach().cpu().numpy())

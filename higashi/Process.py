@@ -149,6 +149,23 @@ def data2triplets(config, data, chrom_start_end, verbose):
 		
 	return unique, new_count
 
+def split_intra_inter(u_, n_):
+	intra_ = u_[:, 1] == u_[:, 2]
+	inter_ = u_[:, 1] != u_[:, 2]
+	
+	intra_data = u_[intra_]
+	intra_count = n_[intra_]
+	intra_data = intra_data[:, [0, 1, 3, 4]]
+	bin1, bin2 = intra_data[:, 2], intra_data[:, 3]
+	new_bin1 = np.minimum(bin1, bin2)
+	new_bin2 = np.maximum(bin1, bin2)
+	intra_data[:, 2] = new_bin1
+	intra_data[:, 3] = new_bin2
+	
+	inter_data = u_[inter_]
+	inter_count = n_[inter_]
+	return intra_data, intra_count, inter_data, inter_count
+
 # Extra the data.txt table
 # Memory consumption re-optimize
 def extract_table(config):
@@ -160,7 +177,10 @@ def extract_table(config):
 	else:
 		input_format = 'higashi_v1'
 	
-	
+	intra_data_all = []
+	intra_count_all = []
+	inter_data_all = []
+	inter_count_all = []
 	
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
 	if input_format == 'higashi_v1':
@@ -168,7 +188,7 @@ def extract_table(config):
 		if "structured" in config:
 			if config["structured"]:
 				chunksize = int(5e6)
-				unique, new_count = [], []
+				# unique, new_count = [], []
 				cell_tab = []
 				
 				p_list = []
@@ -202,26 +222,37 @@ def extract_table(config):
 					
 				for p in as_completed(p_list):
 					u_, n_ = p.result()
-					unique.append(u_)
-					new_count.append(n_)
+					intra_data, intra_count, inter_data, inter_count = split_intra_inter(u_, n_)
+					intra_data_all.append(intra_data)
+					inter_data_all.append(inter_data)
+					intra_count_all.append(intra_count)
+					inter_count_all.append(inter_count)
 					bar.update(n=chunksize)
 					bar.refresh()
 					
-				unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+				intra_data = np.concatenate(intra_data_all, axis=0)
+				intra_count = np.concatenate(intra_count_all, axis=0)
+				inter_data = np.concatenate(inter_data_all, axis=0)
+				inter_count = np.concatenate(inter_count_all, axis=0)
+				
 			else:
 				data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
 				# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 				unique, new_count = data2triplets(config, data, chrom_start_end, verbose=True)
+				intra_data, intra_count, inter_data, inter_count = split_intra_inter(unique, new_count)
+
 		else:
 			data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
 			# ['cell_name','cell_id', 'chrom1', 'pos1', 'chrom2', 'pos2', 'count']
 			unique, new_count = data2triplets(config, data, chrom_start_end, verbose=True)
+			intra_data, intra_count, inter_data, inter_count = split_intra_inter(unique, new_count)
+			
+			
 	elif input_format == 'higashi_v2':
 		print ("extracting from filelist.txt")
 		with open(os.path.join(data_dir, "filelist.txt"), "r") as f:
 			lines = f.readlines()
 			filelist = [line.strip() for line in lines]
-		unique, new_count = [], []
 		bar = trange(len(filelist))
 		for cell_id, file in enumerate(filelist):
 			if "header_included" in config:
@@ -237,10 +268,16 @@ def extract_table(config):
 			if 'count' not in tab.columns:
 				tab['count'] = 1
 			u_, n_= data2triplets(config, tab, chrom_start_end, verbose=True)
-			unique.append(u_)
-			new_count.append(n_)
+			intra_data, intra_count, inter_data, inter_count = split_intra_inter(u_, n_)
+			intra_data_all.append(intra_data)
+			inter_data_all.append(inter_data)
+			intra_count_all.append(intra_count)
+			inter_count_all.append(inter_count)
 			bar.update(1)
-		unique, new_count = np.concatenate(unique, axis=0), np.concatenate(new_count, axis=0)
+		intra_data = np.concatenate(intra_data_all, axis=0)
+		intra_count = np.concatenate(intra_count_all, axis=0)
+		inter_data = np.concatenate(inter_data_all, axis=0)
+		inter_count = np.concatenate(inter_count_all, axis=0)
 		bar.close()
 		
 				
@@ -250,23 +287,13 @@ def extract_table(config):
 		raise EOFError
 	
 	
-	intra_contacts = unique[:, 1] == unique[:, 2]
-	inter_contacts = unique[:, 1] != unique[:, 2]
 	
-	intra_data = unique[intra_contacts]
-	intra_count = new_count[intra_contacts]
-	intra_data = intra_data[:, [0, 1, 3, 4]]
-	bin1, bin2 = intra_data[:, 2], intra_data[:, 3]
-	new_bin1 = np.minimum(bin1, bin2)
-	new_bin2 = np.maximum(bin1, bin2)
-	intra_data[:, 2] = new_bin1
-	intra_data[:, 3] = new_bin2
 	
 	np.save(os.path.join(temp_dir, "data.npy"), intra_data, allow_pickle=True)
 	np.save(os.path.join(temp_dir, "weight.npy"), intra_count.astype('float32'), allow_pickle=True)
 	
-	np.save(os.path.join(temp_dir, "inter_data.npy"), unique[inter_contacts], allow_pickle=True)
-	np.save(os.path.join(temp_dir, "inter_weight.npy"), new_count[inter_contacts].astype('float32'), allow_pickle=True)
+	np.save(os.path.join(temp_dir, "inter_data.npy"), inter_data, allow_pickle=True)
+	np.save(os.path.join(temp_dir, "inter_weight.npy"), inter_count.astype('float32'), allow_pickle=True)
 
 
 def create_matrix_one_chrom(config, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, total_part_num=1, part_num=0, per_cell_read=1000):
@@ -541,13 +568,14 @@ def create_matrix(config):
 					print ("fallback to pseudobulk")
 					bin_adj = pseudo_bulk()
 			binadj_dict[c] = bin_adj
-			# if size >= 1000:
-			# 	# scale
-			# 	sf = int(round(size / 1000))
-			# 	conv_filter = torch.ones(1, 1, 1, sf).to(device)
-			# 	B = F.conv2d(torch.from_numpy(bin_adj)[None, None, :, :].float().to(device), conv_filter, stride=[1, sf])
-			# 	# print (B.shape, bin_adj.shape)
-			# 	bin_adj = B.detach().cpu().numpy()[0, 0, :, :]
+			if size >= 3000:
+				# scale
+				sf = int(round(size / 3000))
+				conv_filter = torch.ones(1, 1, 1, sf)#.to(device)
+				conv_filter = conv_filter / torch.sum(conv_filter)
+				B = F.conv2d(torch.from_numpy(bin_adj)[None, None, :, :].float(), conv_filter, stride=[1, sf])
+				# print (B.shape, bin_adj.shape)
+				bin_adj = B.detach().cpu().numpy()[0, 0, :, :]
 			# if pca_flag:
 			# 	size1 = int(0.2 * len(bin_adj))
 			# 	U, s, Vt = pca(bin_adj, k=size1, raw=True)  # Automatically centers.
@@ -868,7 +896,7 @@ def impute_all(config):
 	print ("min bin", min_bin)
 	
 	print("start conv random walk (scHiCluster) as baseline")
-	# sc_list = []
+	sc_list = []
 	with h5py.File(os.path.join(rw_dir, "schicluster.hdf5"), "w") as hicluster_f:
 		for c in impute_list:
 			a = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy"  % c), allow_pickle=True)
@@ -937,8 +965,8 @@ def generate_feats_one(temp1, temp2, size, length, c, qc_list):
 				model = TruncatedSVD(n_components=size, algorithm='randomized', n_iter=2).fit(temp2[qc_list])
 				temp2 = model.transform(temp2)
 		else:
+			temp1 = TruncatedSVD(n_components=size, algorithm='randomized', n_iter=2).fit_transform(temp1)
 			if temp2 is not None:
-				temp1 = TruncatedSVD(n_components=size, algorithm='randomized', n_iter=2).fit_transform(temp1)
 				temp2 = TruncatedSVD(n_components=size, algorithm='randomized', n_iter=2).fit_transform(temp2)
 		if temp2 is not None:
 			temp1 = np.concatenate([temp1, temp2], axis=1)
@@ -966,6 +994,10 @@ def process_signal(config):
 	temp_dir = config['temp_dir']
 	gpu_num = config['gpu_num']
 	
+	if not os.path.exists(os.path.join(temp_dir, "temp")):
+		os.mkdir(os.path.join(temp_dir, "temp"))
+		
+	
 	print("co-assay mode")
 	signal_file = h5py.File(os.path.join(data_dir, "sc_signal.hdf5"), "r")
 	signal_names = config["coassay_signal"]
@@ -991,11 +1023,11 @@ def process_signal(config):
 	for chrom in chrom_list:
 		temp = chrom2signals[chrom]
 		temp = np.concatenate(temp, axis=-1)
-		np.save(os.path.join(temp_dir, "coassay_%s.npy" % chrom), temp)
+		np.save(os.path.join(temp_dir, "temp", "coassay_%s.npy" % chrom), temp)
 		signal_all.append(temp)
 	signal_all = np.concatenate(signal_all, axis=-1)
 	signal_all = PCA(n_components=int(np.min(signal_all.shape) * 0.8)).fit_transform(signal_all)
-	np.save(os.path.join(temp_dir, "coassay_all.npy"), signal_all)
+	np.save(os.path.join(temp_dir, "temp", "coassay_all.npy"), signal_all)
 	
 	
 	
@@ -1010,7 +1042,7 @@ def process_signal(config):
 	
 	attributes_list = []
 	for chrom in chrom_list:
-		temp = np.load(os.path.join(temp_dir, "pretrain_coassay_%s.npy" % chrom))
+		temp = np.load(os.path.join(temp_dir, "temp", "pretrain_coassay_%s.npy" % chrom))
 		attributes_list.append(temp)
 		
 		
@@ -1020,7 +1052,7 @@ def process_signal(config):
 	
 
 	np.save(os.path.join(temp_dir, "pretrain_coassay.npy"), attributes_list)
-
+	shutil.rmtree(os.path.join(temp_dir, "temp"))
 
 def scool_rwr(config):
 	chrom_list = config['impute_list']

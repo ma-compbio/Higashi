@@ -451,7 +451,11 @@ class Higashi():
 		self.generate_chrom_start_end()
 		self.extract_table()
 		self.create_matrix()
-		from .Process import process_signal, impute_all
+		try:
+			from .Process import process_signal, impute_all
+		except:
+			from Process import process_signal, impute_all
+			
 		if "coassay" in self.config:
 			if self.config["coassay"]:
 				process_signal(self.config)
@@ -461,15 +465,24 @@ class Higashi():
 				impute_all(self.config)
 	
 	def generate_chrom_start_end(self):
-		from .Process import generate_chrom_start_end
+		try:
+			from .Process import generate_chrom_start_end
+		except:
+			from Process import generate_chrom_start_end
 		generate_chrom_start_end(self.config)
 	
 	def extract_table(self):
-		from .Process import extract_table
+		try:
+			from .Process import extract_table
+		except:
+			from Process import extract_table
 		extract_table(self.config)
 	
 	def create_matrix(self):
-		from .Process import create_matrix
+		try:
+			from .Process import create_matrix
+		except:
+			from Process import create_matrix
 		create_matrix(self.config)
 	
 	# fetch information from config.JSON
@@ -579,8 +592,8 @@ class Higashi():
 			
 			if self.coassay:
 				print("coassay")
-				cell_attributes = np.load(os.path.join(self.temp_dir, "pretrain_coassay.npy")).astype('float32')
-				targets.append(cell_attributes)
+				cell_node_feats = np.load(os.path.join(self.temp_dir, "pretrain_coassay.npy")).astype('float32')
+				targets.append(cell_node_feats)
 				cell_node_feats = StandardScaler().fit_transform(cell_node_feats)
 				embeddings.append(cell_node_feats)
 			else:
