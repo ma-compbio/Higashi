@@ -229,7 +229,7 @@ def sum_duplicates(col, data):
 
 def one_thread_generate_neg(edges_part, edges_chrom, edge_weight,
                             collect_num=1, training=False, chroms_in_batch=None):
-	global sparse_chrom_list_GCN
+	global sparse_chrom_list_GCN, neg_num
 	if neg_num == 0:
 		y = np.ones((len(edges_part), 1))
 		w = np.ones((len(edges_part), 1)) * edge_weight.reshape((-1, 1))
