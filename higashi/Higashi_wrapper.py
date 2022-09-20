@@ -44,8 +44,13 @@ def parse_args():
 
 
 def get_free_gpu(num=1, change_cur=True):
-	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')
-	memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
+	# os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')
+	# memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
+	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Total > ./tmp1')
+	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Used > ./tmp2')
+	memory_all = [int(x.split()[2]) for x in open('tmp1', 'r').readlines()]
+	memory_used = [int(x.split()[2]) for x in open('tmp2', 'r').readlines()]
+	memory_available = [m1 - m2 for m1, m2 in zip(memory_all, memory_used)]
 	if len(memory_available) > 0:
 		max_mem = np.max(memory_available)
 		if num == 1 and change_cur:
@@ -60,6 +65,7 @@ def get_free_gpu(num=1, change_cur=True):
 	
 	else:
 		return
+
 
 
 def check_nonzero(x, c):
