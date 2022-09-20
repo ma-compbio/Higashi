@@ -3,7 +3,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from sklearn.decomposition import PCA
 from scipy.sparse import csr_matrix
-from scipy.stats import spearmanr, pearsonr, PearsonRConstantInputWarning, zscore, SpearmanRConstantInputWarning
+from scipy.stats import spearmanr, pearsonr, zscore
+try:
+	from scipy.stats import PearsonRConstantInputWarning, SpearmanRConstantInputWarning
+except:
+	from scipy.stats import ConstantInputWarning as PearsonRConstantInputWarning
+
 import warnings
 from tqdm import trange, tqdm
 import time
