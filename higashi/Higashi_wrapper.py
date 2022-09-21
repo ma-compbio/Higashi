@@ -498,6 +498,7 @@ class Higashi():
 		self.cpu_num = config['cpu_num']
 		if self.cpu_num < 0:
 			self.cpu_num = int(mp.cpu_count())
+		print ("cpu_num", self.cpu_num)
 		self.gpu_num = config['gpu_num']
 		
 		if 'cpu_num_torch' in config:
@@ -1027,7 +1028,7 @@ class Higashi():
 			
 			bar = tqdm(range(self.update_num_per_eval_epoch), desc='  - (Validation)   ', leave=False)
 			if p_list is None:
-				pool = ProcessPoolExecutor(max_workers=cpu_num)
+				pool = ProcessPoolExecutor(max_workers=self.cpu_num)
 				p_list = []
 				
 				for i in range(self.update_num_per_eval_epoch):
@@ -1089,9 +1090,9 @@ class Higashi():
 		if save_embed:
 			self.save_embeddings()
 		
-		eval_pool = ProcessPoolExecutor(max_workers=cpu_num)
+		eval_pool = ProcessPoolExecutor(max_workers=self.cpu_num)
 		
-		train_pool = ProcessPoolExecutor(max_workers=cpu_num)
+		train_pool = ProcessPoolExecutor(max_workers=self.cpu_num)
 		train_p_list = []
 		
 		for epoch_i in range(epochs):
