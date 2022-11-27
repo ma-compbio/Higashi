@@ -61,7 +61,12 @@ Cite our paper by
 
 ![figs/Overview.png](https://github.com/ma-compbio/Higashi/blob/main/figs/higashi_title.png)
 
+# See also
 
+Fast-Higashi for more efficient and robust scHi-C embeddings
+https://www.cell.com/cell-systems/fulltext/S2405-4712(22)00395-7
+
+https://github.com/ma-compbio/Fast-Higashi
 
 # Contact
 
