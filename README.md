@@ -21,11 +21,10 @@ As a computational framework for scHi-C analysis, Higashi has the following feat
 
 # Installation
 
-We now have Higashi on conda.
+We now have Fast-Higashi on conda.
+`conda install -c ruochiz fasthigashi`
 
-`conda install -c ruochiz higashi` (only for linux)
-
-Or
+The conda support for Higashi is still an on-going effort. Currently, you can install it by:
 
 ```{bash}
 git clone https://github.com/ma-compbio/Higashi/
@@ -33,7 +32,7 @@ cd Higashi
 python setup.py install
 ```
 
-It is recommended to have pytorch installed (with CUDA support when applicable) before installing higashi.
+It is recommended to have pytorch installed (with CUDA support when applicable) after installing higashi / fast-higashi.
 
 # Documentation
 Please see [the wiki](https://github.com/ma-compbio/Higashi/wiki) for extensive documentation and example tutorials.
