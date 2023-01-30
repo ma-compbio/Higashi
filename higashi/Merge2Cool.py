@@ -56,12 +56,12 @@ embedding_name = config['embedding_name']
 genome_reference_path = config['genome_reference_path']
 chrom_list = config['impute_list']
 output = args.output
-
+raw_dir = os.path.join(temp_dir, "raw")
 
 list1 = args.list
 
 if list1 is None:
-	origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom_list[-1]), allow_pickle=True)
+	origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom_list[-1]), allow_pickle=True)
 	cell_list_group = [np.arange(len(origin_sparse))]
 	names = [""]
 else:
@@ -96,7 +96,7 @@ for cell_list, name in zip(cell_list_group, names):
 	count = []
 	off_set = 0
 	for chrom_index, chrom in enumerate(chrom_list):
-		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
+		origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 		size = origin_sparse[0].shape[0]
 		mask = create_mask(-1, chrom, origin_sparse)
 		mask = 1 - mask
