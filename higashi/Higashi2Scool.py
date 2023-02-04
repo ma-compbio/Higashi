@@ -67,6 +67,7 @@ if __name__ == '__main__':
 	config = get_config(args.config)
 	res = config['resolution']
 	temp_dir = config['temp_dir']
+	raw_dir = os.path.join(temp_dir, "raw")
 	neighbor_num = config['neighbor_num']
 	embedding_name = config['embedding_name']
 	
@@ -90,7 +91,7 @@ if __name__ == '__main__':
 		else:
 			impute_f = h5py.File(os.path.join(temp_dir, "%s_%s_nbr_0_impute.hdf5" % (chrom, embedding_name)), "r")
 			
-		origin_sparse = np.load(os.path.join(temp_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
+		origin_sparse = np.load(os.path.join(raw_dir, "%s_sparse_adj.npy" % chrom), allow_pickle=True)
 		size = origin_sparse[0].shape[0]
 		mask_start, mask_end = skip_start_end(config, chrom)
 		del origin_sparse
