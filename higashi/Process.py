@@ -106,6 +106,25 @@ def data2triplets(config, data, chrom_start_end, verbose):
 	else:
 		downsample = 1.0
 	
+	if type(data) is tuple:
+		file, cell_id = data
+		if "header_included" in config:
+			if config['header_included']:
+				tab = pd.read_table(file, sep="\t")
+			else:
+				tab = pd.read_table(file, sep="\t", header=None)
+				tab.columns = config['contact_header']
+		else:
+			tab = pd.read_table(file, sep="\t", header=None)
+			tab.columns = config['contact_header']
+		tab['cell_id'] = cell_id
+		if 'count' not in tab.columns:
+			tab['count'] = 1
+		data = tab
+		data = data[(((np.abs(data['pos2'] - data['pos1']) >= 2500) | (np.abs(data['pos2'] - data['pos1']) == 0)) & (data['chrom1'] == data['chrom2'])) | (
+						data['chrom1'] != data['chrom2'])].reset_index()
+		
+		
 	pos1 = np.array(data['pos1'])
 	pos2 = np.array(data['pos2'])
 	bin1 = np.floor(pos1 / res).astype('int')
@@ -169,6 +188,11 @@ def split_intra_inter(u_, n_):
 # Extra the data.txt table
 # Memory consumption re-optimize
 def extract_table(config):
+	if 'keep_inter' in config:
+		keep_inter = config['keep_inter']
+	else:
+		keep_inter = False
+		
 	# fetch info from config
 	data_dir = config['data_dir']
 	temp_dir = config['temp_dir']
@@ -224,16 +248,18 @@ def extract_table(config):
 					u_, n_ = p.result()
 					intra_data, intra_count, inter_data, inter_count = split_intra_inter(u_, n_)
 					intra_data_all.append(intra_data)
-					inter_data_all.append(inter_data)
 					intra_count_all.append(intra_count)
-					inter_count_all.append(inter_count)
+					if keep_inter:
+						inter_data_all.append(inter_data)
+						inter_count_all.append(inter_count)
 					bar.update(n=chunksize)
 					bar.refresh()
 					
 				intra_data = np.concatenate(intra_data_all, axis=0)
 				intra_count = np.concatenate(intra_count_all, axis=0)
-				inter_data = np.concatenate(inter_data_all, axis=0)
-				inter_count = np.concatenate(inter_count_all, axis=0)
+				if keep_inter:
+					inter_data = np.concatenate(inter_data_all, axis=0)
+					inter_count = np.concatenate(inter_count_all, axis=0)
 				
 			else:
 				data = pd.read_table(os.path.join(data_dir, "data.txt"), sep="\t")
@@ -254,30 +280,39 @@ def extract_table(config):
 			lines = f.readlines()
 			filelist = [line.strip() for line in lines]
 		bar = trange(len(filelist))
+		
+		p_list = []
+		pool = ProcessPoolExecutor(max_workers=cpu_num)
+		
+		
 		for cell_id, file in enumerate(filelist):
-			if "header_included" in config:
-				if config['header_included']:
-					tab = pd.read_table(file, sep="\t")
-				else:
-					tab = pd.read_table(file, sep="\t", header=None)
-					tab.columns = config['contact_header']
-			else:
-				tab = pd.read_table(file, sep="\t", header=None)
-				tab.columns = config['contact_header']
-			tab['cell_id'] = cell_id
-			if 'count' not in tab.columns:
-				tab['count'] = 1
-			u_, n_= data2triplets(config, tab, chrom_start_end, verbose=True)
+			p_list.append(pool.submit(data2triplets, config, (file, cell_id), chrom_start_end, False))
+			
+		for p in as_completed(p_list):
+			u_, n_ = p.result()
 			intra_data, intra_count, inter_data, inter_count = split_intra_inter(u_, n_)
 			intra_data_all.append(intra_data)
-			inter_data_all.append(inter_data)
 			intra_count_all.append(intra_count)
-			inter_count_all.append(inter_count)
-			bar.update(1)
+			if keep_inter:
+				inter_data_all.append(inter_data)
+				inter_count_all.append(inter_count)
+			bar.update(n=1)
+			bar.refresh()
+			
+			# tab = tab[((np.abs(tab['pos2'] - tab['pos1']) >= 2500) & (tab['chrom1'] == tab['chrom2'])) | (
+			# 			tab['chrom1'] != tab['chrom2'])].reset_index()
+			# u_, n_= data2triplets(config, tab, chrom_start_end, verbose=False)
+			# intra_data, intra_count, inter_data, inter_count = split_intra_inter(u_, n_)
+			# intra_data_all.append(intra_data)
+			# inter_data_all.append(inter_data)
+			# intra_count_all.append(intra_count)
+			# inter_count_all.append(inter_count)
+			# bar.update(1)
 		intra_data = np.concatenate(intra_data_all, axis=0)
 		intra_count = np.concatenate(intra_count_all, axis=0)
-		inter_data = np.concatenate(inter_data_all, axis=0)
-		inter_count = np.concatenate(inter_count_all, axis=0)
+		if keep_inter:
+			inter_data = np.concatenate(inter_data_all, axis=0)
+			inter_count = np.concatenate(inter_count_all, axis=0)
 		bar.close()
 		
 				
@@ -291,9 +326,9 @@ def extract_table(config):
 	
 	np.save(os.path.join(temp_dir, "data.npy"), intra_data, allow_pickle=True)
 	np.save(os.path.join(temp_dir, "weight.npy"), intra_count.astype('float32'), allow_pickle=True)
-	
-	np.save(os.path.join(temp_dir, "inter_data.npy"), inter_data, allow_pickle=True)
-	np.save(os.path.join(temp_dir, "inter_weight.npy"), inter_count.astype('float32'), allow_pickle=True)
+	if keep_inter:
+		np.save(os.path.join(temp_dir, "inter_data.npy"), inter_data, allow_pickle=True)
+		np.save(os.path.join(temp_dir, "inter_weight.npy"), inter_count.astype('float32'), allow_pickle=True)
 
 
 def create_matrix_one_chrom(config, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, total_part_num=1, part_num=0, per_cell_read=1000):
@@ -441,7 +476,7 @@ def create_inter_matrix(config, cell_num):
 		np.save(os.path.join(raw_dir, "%s_sparse_inter_adj.npy" % chrom_list[c]), chrom_cell_list)
 
 # Generate matrices for feats and baseline
-def create_matrix(config):
+def create_matrix(config, disable_mpl=False):
 	# fetch info from config
 	chrom_list = config['chrom_list']
 	temp_dir = config['temp_dir']
@@ -519,16 +554,23 @@ def create_matrix(config):
 				cell_id = np.array_split(np.arange(cell_num), split_num)
 				for part in range(split_num):
 					mask = np.isin(temp[:, 0], cell_id[part])
-					p_list.append(
-						pool.submit(create_matrix_one_chrom, config, c, size, cell_size, temp[mask], temp_weight[mask], chrom_start_end,
-						            cell_id[part], split_num, part, per_cell_read))
+					if not disable_mpl:
+						p_list.append(
+							pool.submit(create_matrix_one_chrom, config, c, size, cell_size, temp[mask], temp_weight[mask], chrom_start_end,
+										cell_id[part], split_num, part, per_cell_read))
+					else:
+						p_list.append([config, c, size, cell_size, temp[mask], temp_weight[mask], chrom_start_end,
+										cell_id[part], split_num, part, per_cell_read])
 					
 				cell_feats[c] = [[] for p in range(split_num)]
 				qc_list[c] = [[] for p in range(split_num)]
 				c2total_part_num[c] = split_num
 			else:
-				p_list.append(
-					pool.submit(create_matrix_one_chrom, config, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, 1, 0, per_cell_read))
+				if not disable_mpl:
+					p_list.append(
+						pool.submit(create_matrix_one_chrom, config, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, 1, 0, per_cell_read))
+				else:
+					p_list.append([config, c, size, cell_size, temp, temp_weight, chrom_start_end, cell_num, 1, 0, per_cell_read])
 				cell_feats[c] = [[]]
 				qc_list[c] = [[]]
 				c2total_part_num[c] = 1
@@ -540,6 +582,8 @@ def create_matrix(config):
 				temp_mask[:, 2] - chrom_start_end[c, 0], temp_mask[:, 3] - chrom_start_end[c, 0])), shape=(size, size), dtype='float32')
 				bin_adj = np.array(bin_adj.todense())
 				bin_adj = bin_adj + bin_adj.T + np.diag(np.sum(bin_adj, axis=-1) == 0) #- np.diag(np.diagonal(bin_adj))
+				mean_, std_ = np.mean(bin_adj), np.std(bin_adj)
+				np.clip(bin_adj, a_min=None, a_max=mean_ + 10 * std_, out=bin_adj)
 				bin_adj = normalize(bin_adj, axis=1, norm='l1')
 				# bin_adj = sqrt_norm(bin_adj)
 				# bin_adj = bin_adj / np.sum(bin_adj) * bin_adj.shape[0]
@@ -583,13 +627,23 @@ def create_matrix(config):
 			create_or_overwrite(save_file, "%d" % c, bin_adj)
 
 		bar = trange(len(p_list), desc='creating matrices tasks')
-		for p in as_completed(p_list):
-			chrom_count, c, a, b, total_part_num, part_num, cell_id, qc = p.result()
-			total_reads[cell_id] += a.reshape((-1))
-			total_possible += float(b) / total_part_num
-			cell_feats[c][part_num] = chrom_count
-			qc_list[c][part_num] = qc
-			bar.update(1)
+		if not disable_mpl:
+			for p in as_completed(p_list):
+				chrom_count, c, a, b, total_part_num, part_num, cell_id, qc = p.result()
+				total_reads[cell_id] += a.reshape((-1))
+				total_possible += float(b) / total_part_num
+				cell_feats[c][part_num] = chrom_count
+				qc_list[c][part_num] = qc
+				bar.update(1)
+		else:
+			for p in p_list:
+				chrom_count, c, a, b, total_part_num, part_num, cell_id, qc = create_matrix_one_chrom(*p)
+				total_reads[cell_id] += a.reshape((-1))
+				total_possible += float(b) / total_part_num
+				cell_feats[c][part_num] = chrom_count
+				qc_list[c][part_num] = qc
+				bar.update(1)
+
 		bar.close()
 
 		for c in range(len(chrom_list)):
@@ -690,7 +744,7 @@ def create_matrix(config):
 			chrom2celladj[c] = cell_adj_all
 			total_linear_chrom_size += int(math.sqrt(list(cell_adj_all[0].shape)[-1]) * res_cell / 1000000)
 		# print (total_linear_chrom_size)
-		pool = ProcessPoolExecutor(max_workers=cpu_num)
+		# pool = ProcessPoolExecutor(max_workers=cpu_num)
 		if len(chrom_list) > 1:
 			total_embed_size = min(max(int(cell_adj_all[0].shape[0] * 0.5), int(total_linear_chrom_size * 0.5)),
 			                       int(cell_adj_all[0].shape[0] * 0.65))
@@ -698,7 +752,7 @@ def create_matrix(config):
 			total_embed_size = int(np.min(cell_adj_all[0].shape) * 0.8)
 		total_embed_size = min(total_embed_size, 2400)
 		print("total_feats_size", total_embed_size)
-		p_list = []
+		# p_list = []
 		
 		bar = trange(len(chrom_list))
 		if "cell" not in save_file.keys():
@@ -706,9 +760,10 @@ def create_matrix(config):
 		else:
 			save_file_cell = save_file["cell"]
 		
-		for p in as_completed(p_list):
-			temp1, c = p.result()
-		
+		# for p in as_completed(p_list):
+		# 	temp1, c = p.result()
+
+
 		for c in range(len(chrom_list)):
 			temp = chrom2celladj[c]
 			length = int(np.sqrt(temp[0].shape[-1]) / 1000000 * res_cell)
@@ -941,7 +996,7 @@ def generate_feats_one(temp1, temp2, size, length, c, qc_list):
 			mask = np.array(np.sum(temp > 0, axis=0) > min(5, temp.shape[0] - 2))
 			mask = mask.reshape((-1))
 			temp = temp[:, mask]
-			
+
 			size = min(size, temp.shape[-1] - 2)
 			mean_, std_ = np.mean(temp.data), np.std(temp.data)
 			# print("mean", "std", "max", "0.9q", mean_, std_, np.max(temp.data), np.quantile(temp.data, 0.9))
