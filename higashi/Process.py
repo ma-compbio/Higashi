@@ -110,12 +110,12 @@ def data2triplets(config, data, chrom_start_end, verbose):
 		file, cell_id = data
 		if "header_included" in config:
 			if config['header_included']:
-				tab = pd.read_table(file, sep="\t")
+				tab = pd.read_table(file, sep="\t", comment="#")
 			else:
-				tab = pd.read_table(file, sep="\t", header=None)
+				tab = pd.read_table(file, sep="\t", header=None, comment="#")
 				tab.columns = config['contact_header']
 		else:
-			tab = pd.read_table(file, sep="\t", header=None)
+			tab = pd.read_table(file, sep="\t", header=None, comment="#")
 			tab.columns = config['contact_header']
 		tab['cell_id'] = cell_id
 		if 'count' not in tab.columns:
