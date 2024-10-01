@@ -856,8 +856,8 @@ class Higashi():
 		self.validation_data_generator = DataGenerator(test_data, test_chrom, test_weight,
 		                                               int(self.batch_size / (neg_num + 1)),
 		                                               False, num_list, k=1)
-	
-	
+
+
 	def forward_batch_hyperedge(self, batch_data, batch_weight, batch_chrom, batch_to_neighs, y,
 	                            chroms_in_batch):
 		model = self.higashi_model
@@ -1298,7 +1298,7 @@ class Higashi():
 				cell_neighbor_list_local[i + 1] = (neighbor + 1)[start:]
 				cell_neighbor_weight_list_local[i + 1] = (new_w)
 		
-		return np.array(cell_neighbor_list_local), np.array(cell_neighbor_weight_list_local)
+		return np.array(cell_neighbor_list_local, dtype='object'), np.array(cell_neighbor_weight_list_local, dtype='object')
 	
 	def get_cell_neighbor(self, start=1):
 		v = self.cell_embeddings if not self.pre_cell_embed else np.load(self.pre_cell_embed)
@@ -1320,7 +1320,8 @@ class Higashi():
 			cell_neighbor_list_local[i + 1] = (neighbor_new + 1)[start:]
 			cell_neighbor_weight_list_local[i + 1] = (new_w)
 		
-		return np.array(cell_neighbor_list_local), np.array(cell_neighbor_weight_list_local)
+		return (np.array(cell_neighbor_list_local, dtype='object'),
+				np.array(cell_neighbor_weight_list_local, dtype='object'))
 	
 	
 	def train_for_embeddings(self, max_epochs=None):
@@ -1468,7 +1469,7 @@ class Higashi():
 				                   os.path.join(self.temp_dir, "sparse_nondiag_adj_nbr_1.npy"),
 				                   None,
 				                   select_gpus[i])
-			
+
 			impute_pool.shutdown(wait=True)
 			linkhdf5("%s_nbr_%d_impute" % (self.embedding_name, 0), cell_id_all, self.temp_dir, self.impute_list,
 			         None)
